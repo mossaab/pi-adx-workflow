@@ -13,7 +13,7 @@
  *   /adx-status        show current workflow state
  *   /adx-resume        resume a blocked/waiting workflow
  *   /adx-cancel        cancel the current workflow run
- *   /adx-config        show effective config; `set key=value [project]` updates it
+ *   /adx-config        show config / "edit" opens a menu / "set key=value [project]"
  * Shortcut:
  *   Ctrl+Alt+A   toggle plan mode
  */
@@ -234,10 +234,49 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('adx-config', {
-    description: 'Show effective adx config; "/adx-config set <key>=<value> [project]" updates the config file',
+    description: 'Show effective adx config; "edit" opens a menu; "set <key>=<value> [project]" updates the config file',
     handler: async (args, c) => {
       ctx = c
       const raw = (args ?? '').trim()
+      const effective = { ...DEFAULT_CONFIG, ...config }
+      const keys = Object.keys(DEFAULT_CONFIG) as (keyof AdxConfig)[]
+      const valuesFor = (k: keyof AdxConfig): string[] =>
+        k === 'defaultBuildWorkflow' ? ['build', 'build-verify'] : ['true', 'false']
+      const toValue = (v: string): boolean | string => (v === 'true' ? true : v === 'false' ? false : v)
+
+      // ------------------------------------------------------------------ menu
+      if (raw === 'edit' || raw === '') {
+        const scopeLabel = await c.ui.select('adx config: which file to edit?', [
+          'User (all projects) — ~/.pi/agent/adx-workflow.json',
+          'Project (this repo) — .pi/adx-workflow.json',
+        ])
+        if (scopeLabel === undefined) {
+          c.ui.notify('adx config: cancelled', 'info')
+          return
+        }
+        const scope: 'user' | 'project' = scopeLabel.startsWith('User') ? 'user' : 'project'
+        const keyLabel = await c.ui.select('adx config: which setting?', keys.map((k) => `${k} = ${String(effective[k])}`))
+        if (keyLabel === undefined) {
+          c.ui.notify('adx config: cancelled', 'info')
+          return
+        }
+        const key = keyLabel.split(' = ')[0] as keyof AdxConfig
+        const valLabel = await c.ui.select(`adx config: value for ${key}?`, valuesFor(key))
+        if (valLabel === undefined) {
+          c.ui.notify('adx config: cancelled', 'info')
+          return
+        }
+        const value = toValue(valLabel)
+        setConfigValue(c.cwd, key, value, scope)
+        config = loadConfig(c.cwd)
+        c.ui.notify(
+          `adx: ${scope} config updated: ${key}=${String(value)} (showWidget/skipReview/defaultBuildWorkflow apply now; plan/auto modes next session)`,
+          'info',
+        )
+        return
+      }
+
+      // ------------------------------------------------------------------ one-shot set
       if (raw.startsWith('set ')) {
         const kv = raw.slice(4).trim()
         const scope: 'user' | 'project' = kv.endsWith(' project') ? 'project' : 'user'
@@ -254,7 +293,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
           c.ui.notify(`adx: unknown config key "${key}" (valid: ${allowed.join(', ')})`, 'warning')
           return
         }
-        const value = valRaw === 'true' ? true : valRaw === 'false' ? false : valRaw
+        const value = toValue(valRaw)
         setConfigValue(c.cwd, key as keyof AdxConfig, value, scope)
         config = loadConfig(c.cwd)
         c.ui.notify(
@@ -263,14 +302,19 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         )
         return
       }
-      const effective = { ...DEFAULT_CONFIG, ...config }
+
+      // ------------------------------------------------------------------ show
+      if (raw !== 'show') {
+        c.ui.notify('usage: /adx-config [edit | show | set <key>=<value> [project]]', 'warning')
+        return
+      }
       c.ui.notify(
         [
           'adx config (effective):',
           JSON.stringify(effective, null, 2),
           `user file:    ${userConfigPath()}`,
           `project file: ${projectConfigPath(c.cwd)}`,
-          'update: /adx-config set <key>=<value> [project]',
+          'update: /adx-config edit (menu) or /adx-config set <key>=<value> [project]',
         ].join('\n'),
         'info',
       )

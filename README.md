@@ -97,8 +97,10 @@ All keys optional, unknown keys ignored, malformed file = defaults.
 You can also manage it from inside pi:
 
 ```
-/adx-config                        show the effective config + file paths
-/adx-config set defaultPlanMode=true
+/adx-config                          show the effective config + file paths
+/adx-config edit                     interactive menu: pick the file (user/project),
+                                     the setting, then the value
+/adx-config set defaultPlanMode=true one-shot update (user file)
 /adx-config set showWidget=false project   # write to the project file
 ```
 
