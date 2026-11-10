@@ -235,7 +235,7 @@ export function planModeBashGuard(
   const command = bashCommandFromArgs(args)
   if (!command) return undefined
   if (!isSafeCommand(command)) {
-    const msg = `Plan mode is read-only: bash command not on the read-only allowlist: ${command.slice(0, 120)}`
+    const msg = `Plan mode is read-only: bash command not on the read-only allowlist: ${command.slice(0, 120)}\nPlan mode stays active — retry with a simpler read-only variant (plain ls, no flags, no && chains or file redirects) or proceed with the plan.`
     notify(msg)
     return msg
   }

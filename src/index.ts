@@ -182,8 +182,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       ctx?.ui.notify(msg, 'warning'),
     )
     if (problem) {
-      // Block the call with a reason the model can react to (plan-mode style).
-      return { block: true, reason: problem, terminate: true }
+      // Block the call and hand the reason back to the model as a tool result —
+      // WITHOUT terminate: the turn continues so the model can adapt (simpler
+      // read-only variant, another tool, or proceed with the plan). Plan mode
+      // itself stays on; only this one command is refused.
+      return { block: true, reason: problem }
     }
   })
 
