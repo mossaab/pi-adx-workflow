@@ -9,9 +9,9 @@
  * are ignored (forward compatibility).
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export interface AdxConfig {
   /** Enter plan mode automatically at session start (default: false) */
@@ -44,4 +44,61 @@ export function loadConfig(cwd: string): AdxConfig {
   const user = readConfigFile(join(homedir(), '.pi', 'agent', 'adx-workflow.json'))
   const project = readConfigFile(join(cwd, '.pi', 'adx-workflow.json'))
   return { ...user, ...project }
+}
+
+// ============================================================================
+// Paths + dynamic management (auto-create on first run, /adx-config set …)
+// ============================================================================
+
+export const DEFAULT_CONFIG: Required<AdxConfig> = {
+  defaultPlanMode: false,
+  showWidget: true,
+  autoMode: false,
+  skipReview: false,
+  defaultBuildWorkflow: 'build',
+}
+
+export function userConfigPath(): string {
+  return join(homedir(), '.pi', 'agent', 'adx-workflow.json')
+}
+
+export function projectConfigPath(cwd: string): string {
+  return join(cwd, '.pi', 'adx-workflow.json')
+}
+
+/**
+ * First-run: create the user config file with the defaults so the user has a
+ * ready-to-edit file. Returns the created path, or undefined (already exists /
+ * write failed). Project files are never auto-created (repo pollution).
+ */
+export function ensureUserConfig(): string | undefined {
+  const path = userConfigPath()
+  if (existsSync(path)) return undefined
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `${JSON.stringify(DEFAULT_CONFIG, null, 2)}\n`)
+    return path
+  } catch {
+    return undefined
+  }
+}
+
+/** Update one key in the user (default) or project config file. */
+export function setConfigValue(
+  cwd: string,
+  key: keyof AdxConfig,
+  value: unknown,
+  scope: 'user' | 'project' = 'user',
+): AdxConfig {
+  const path = scope === 'project' ? projectConfigPath(cwd) : userConfigPath()
+  let current: AdxConfig = {}
+  if (existsSync(path)) current = readConfigFile(path)
+  ;(current as Record<string, unknown>)[key] = value
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `${JSON.stringify(current, null, 2)}\n`)
+  } catch {
+    /* read-only fs: the in-memory value still applies for this session */
+  }
+  return { ...DEFAULT_CONFIG, ...current } as AdxConfig
 }

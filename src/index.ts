@@ -13,6 +13,7 @@
  *   /adx-status        show current workflow state
  *   /adx-resume        resume a blocked/waiting workflow
  *   /adx-cancel        cancel the current workflow run
+ *   /adx-config        show effective config; `set key=value [project]` updates it
  * Shortcut:
  *   Ctrl+Alt+A   toggle plan mode
  */
@@ -34,6 +35,13 @@ import { loadState } from './store.js'
 import { refreshFlowWidget, clearFlowWidget } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
+import {
+  DEFAULT_CONFIG,
+  ensureUserConfig,
+  projectConfigPath,
+  setConfigValue,
+  userConfigPath,
+} from './config.js'
 
 // The executor is wired in step 6; keep a mutable handle so index.ts can
 // forward commands/tools without a circular import.
@@ -225,6 +233,50 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
   })
 
+  pi.registerCommand('adx-config', {
+    description: 'Show effective adx config; "/adx-config set <key>=<value> [project]" updates the config file',
+    handler: async (args, c) => {
+      ctx = c
+      const raw = (args ?? '').trim()
+      if (raw.startsWith('set ')) {
+        const kv = raw.slice(4).trim()
+        const scope: 'user' | 'project' = kv.endsWith(' project') ? 'project' : 'user'
+        const body = scope === 'project' ? kv.slice(0, -8).trim() : kv
+        const eq = body.indexOf('=')
+        if (eq <= 0) {
+          c.ui.notify('usage: /adx-config set <key>=<value> [project]', 'warning')
+          return
+        }
+        const key = body.slice(0, eq).trim()
+        const valRaw = body.slice(eq + 1).trim()
+        const allowed = Object.keys(DEFAULT_CONFIG) as (keyof AdxConfig)[]
+        if (!allowed.includes(key as keyof AdxConfig)) {
+          c.ui.notify(`adx: unknown config key "${key}" (valid: ${allowed.join(', ')})`, 'warning')
+          return
+        }
+        const value = valRaw === 'true' ? true : valRaw === 'false' ? false : valRaw
+        setConfigValue(c.cwd, key as keyof AdxConfig, value, scope)
+        config = loadConfig(c.cwd)
+        c.ui.notify(
+          `adx: ${scope} config updated (${key}=${String(value)}) — showWidget/skipReview/defaultBuildWorkflow apply now; plan/auto modes apply next session`,
+          'info',
+        )
+        return
+      }
+      const effective = { ...DEFAULT_CONFIG, ...config }
+      c.ui.notify(
+        [
+          'adx config (effective):',
+          JSON.stringify(effective, null, 2),
+          `user file:    ${userConfigPath()}`,
+          `project file: ${projectConfigPath(c.cwd)}`,
+          'update: /adx-config set <key>=<value> [project]',
+        ].join('\n'),
+        'info',
+      )
+    },
+  })
+
   pi.registerShortcut('ctrl+alt+a', {
     description: 'Toggle adx plan mode',
     handler: async (c) => {
@@ -237,6 +289,9 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // ------------------------------------------------------------------ events
   pi.on('session_start', async (_event, c) => {
     ctx = c
+    // First run: give the user a ready-to-edit config file with the defaults.
+    const created = ensureUserConfig()
+    if (created) c.ui.notify(`adx: created default config at ${created} (edit to customize)`, 'info')
     config = loadConfig(c.cwd)
     // Restore any persisted run (e.g. after a pi restart)
     const state = await loadState(c.cwd)

@@ -87,11 +87,23 @@ shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
 
 ## Configuration
 
-Optional JSON config, project overrides user (all keys optional, unknown keys
-ignored, malformed file = defaults):
+The user config file is **created automatically on first run** with all
+defaults, ready to edit:
 
-- user: `~/.pi/agent/adx-workflow.json`
-- project: `<cwd>/.pi/adx-workflow.json`
+- user: `~/.pi/agent/adx-workflow.json` (auto-created, all projects)
+- project: `<cwd>/.pi/adx-workflow.json` (optional, overrides user per key)
+
+All keys optional, unknown keys ignored, malformed file = defaults.
+You can also manage it from inside pi:
+
+```
+/adx-config                        show the effective config + file paths
+/adx-config set defaultPlanMode=true
+/adx-config set showWidget=false project   # write to the project file
+```
+
+`showWidget`, `skipReview` and `defaultBuildWorkflow` apply immediately;
+`defaultPlanMode` / `autoMode` apply from the next session.
 
 ```json
 {
