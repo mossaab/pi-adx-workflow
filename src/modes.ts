@@ -53,10 +53,11 @@ const DESTRUCTIVE_PATTERNS = [
   /\btruncate\b/i,
   /\bdd\b/i,
   /\bshred\b/i,
-  // Output redirects — but two idioms are not destructive:
-  // `2>&1` (stderr to stdout) and `> /dev/null` (suppress output). Real file
-  // redirects ("> file") stay blocked.
-  /(^|[^<])>(?!&|\s*\/dev\/null)/,
+  // Output redirects — but three idioms are not destructive:
+  // `2>&1` (stderr to stdout), `> /dev/null` (suppress output), and `->` / `=>`
+  // arrows inside quoted code (python/heredoc print strings, JS lambdas). A
+  // real redirect has a space/`0-9`/`(` before the `>`. "> file" stays blocked.
+  /(^|[^-<=])>(?!&|\s*\/dev\/null)/,
   />>/,
   /\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
   /\byarn\s+(add|remove|install|publish)/i,
