@@ -99,7 +99,8 @@ You can also manage it from inside pi:
 ```
 /adx-config                          show the effective config + file paths
 /adx-config edit                     interactive menu: pick the file (user/project),
-                                     the setting, then the value
+                                     then pick a setting row to TOGGLE it (booleans flip,
+                                     defaultBuildWorkflow cycles) — repeat, "Done" exits
 /adx-config set defaultPlanMode=true one-shot update (user file)
 /adx-config set showWidget=false project   # write to the project file
 ```

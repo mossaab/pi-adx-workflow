@@ -240,8 +240,6 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       const raw = (args ?? '').trim()
       const effective = { ...DEFAULT_CONFIG, ...config }
       const keys = Object.keys(DEFAULT_CONFIG) as (keyof AdxConfig)[]
-      const valuesFor = (k: keyof AdxConfig): string[] =>
-        k === 'defaultBuildWorkflow' ? ['build', 'build-verify'] : ['true', 'false']
       const toValue = (v: string): boolean | string => (v === 'true' ? true : v === 'false' ? false : v)
 
       // ------------------------------------------------------------------ menu
@@ -255,20 +253,23 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
           return
         }
         const scope: 'user' | 'project' = scopeLabel.startsWith('User') ? 'user' : 'project'
-        // Loop: after each change, back to the setting menu (updated values).
-        // "Done" exits the menu.
+        // Single-step menu: picking a setting row TOGGLES/rotates its value
+        // (booleans flip, defaultBuildWorkflow cycles) and writes it.
+        // "Done" exits. Loop until done.
         let changed = 0
         const DONE = 'Done (save & exit)'
         while (true) {
           const keyLabel = await c.ui.select(
-            'adx config: which setting?',
+            'adx config: pick a setting to toggle it (Enter = flip value)',
             [...keys.map((k) => `${k} = ${String(effective[k])}`), DONE],
           )
           if (keyLabel === undefined || keyLabel === DONE) break
           const key = keyLabel.split(' = ')[0] as keyof AdxConfig
-          const valLabel = await c.ui.select(`adx config: value for ${key}?`, valuesFor(key))
-          if (valLabel === undefined) continue // cancelled the value picker → pick again
-          const value = toValue(valLabel)
+          const current = effective[key]
+          const value: boolean | string =
+            key === 'defaultBuildWorkflow'
+              ? current === 'build' ? 'build-verify' : 'build'
+              : !current
           ;(effective as Record<string, boolean | string>)[key] = value
           setConfigValue(c.cwd, key, value, scope)
           config = loadConfig(c.cwd)
