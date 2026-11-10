@@ -200,6 +200,7 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 - Web & system diagnostics: you may start a dev server (npm run dev in the background), take a headless screenshot (npx playwright screenshot <url> /tmp/shot.png), probe ports (lsof -i :PORT), then stop only the processes you started (kill <pid> / pkill -f <pattern>). Keep all artifacts in /tmp — plan mode must not modify the project.
 - If a bash command is rejected by the plan-mode allowlist, it is NOT fatal: retry with a simpler read-only variant (plain ls without flags, no && chains, pipes, or file redirects) or proceed with what you already know. Never stop your turn because of a blocked command.
 - Add each acceptance criterion with flow_meta (action "add", key "criteria"): a self-contained, verifiable description of what needs to be done AND how to verify it.
+- After adding, refining or removing ANY criterion, re-present the COMPLETE current criteria list as a single recap: every criterion, numbered, with its status. First check the full list with flow_meta (action "get", key "criteria"). Never write an incremental recap of only the new/changed items — there should always be exactly one complete recap of all points.
 - Present the criteria plainly and stop there.
 - Never ask "Do you approve these criteria and shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question.
 - Do not call flow_step_done in plan mode; it is only used inside a running workflow step.
