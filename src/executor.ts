@@ -66,6 +66,8 @@ export interface ExecutorDeps {
   notify: (msg: string, level?: 'info' | 'warning' | 'error') => void
   /** Called after every state change so the TUI widget can refresh. */
   updateWidget?: () => void
+  /** When it returns false, TUI widgets (flow widget, sub-agent activity) are suppressed (config `showWidget`). */
+  widgetEnabled?: () => boolean
   /** Injectable spawner (e2e). Default: in-house `pi -p` child process. */
   spawn?: (agent: string, task: string) => Promise<SpawnResult>
   /** Injectable never-stop resume (e2e). Default: re-spawn the persisted child session. */
@@ -409,7 +411,7 @@ export class AdxExecutor {
     // shows the child is working (minutes-long sub-agent runs). Restored by
     // refreshFlowWidget() below.
     const activityCtx = this.lastCtx
-    if (activityCtx) {
+    if (activityCtx && this.deps.widgetEnabled?.() !== false) {
       setSubAgentActivity(activityCtx, {
         agent: step.subAgentType,
         step: step.name,
@@ -455,7 +457,7 @@ export class AdxExecutor {
     // Child is done: restore the static criteria/step widget (also picks up
     // the child's flow_meta updates) now that the animated activity widget
     // is no longer needed.
-    if (this.lastCtx) refreshFlowWidget(this.lastCtx)
+    if (this.lastCtx && this.deps.widgetEnabled?.() !== false) refreshFlowWidget(this.lastCtx)
     const outcome: StepOutcome = result.ok
       ? { result: 'success', output: { content } }
       : { result: 'error', output: { content: content || `sub-agent error: ${result.error}` } }

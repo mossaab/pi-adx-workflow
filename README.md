@@ -85,6 +85,32 @@ When the planner finishes in interactive mode it calls `flow_plan_done`, which
 shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
 **Choose workspace** (current workspace or fresh worktree, then the pipeline).
 
+## Configuration
+
+Optional JSON config, project overrides user (all keys optional, unknown keys
+ignored, malformed file = defaults):
+
+- user: `~/.pi/agent/adx-workflow.json`
+- project: `<cwd>/.pi/adx-workflow.json`
+
+```json
+{
+  "defaultPlanMode": true,
+  "showWidget": true,
+  "autoMode": false,
+  "skipReview": false,
+  "defaultBuildWorkflow": "build"
+}
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `defaultPlanMode` | `false` | Start every pi session in plan mode (no active run to restore) |
+| `showWidget` | `true` | `false` hides the bottom flow/criteria widget entirely |
+| `autoMode` | `false` | Persistent `--adx-auto`: unattended plan → build → verify → recap (the CLI flag still wins when passed) |
+| `skipReview` | `false` | Default `skip_review=true` for the build-verify pipeline (picker + `/adx-build-verify`); an explicit `skip_review=` in the command args wins |
+| `defaultBuildWorkflow` | `"build"` | Which workflow `/adx-build` launches: `"build"` (simple) or `"build-verify"` (full) |
+
 Typical session:
 
 1. `/adx-plan`

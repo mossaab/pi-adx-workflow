@@ -33,6 +33,7 @@ import {
 import { loadState } from './store.js'
 import { refreshFlowWidget, clearFlowWidget } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
+import { loadConfig, type AdxConfig } from './config.js'
 
 // The executor is wired in step 6; keep a mutable handle so index.ts can
 // forward commands/tools without a circular import.
@@ -51,6 +52,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   let autoMode = false
   let toolsBeforePlanMode: string[] | undefined
   let ctx: ExtensionContext | undefined
+  /** User/project config (loaded at session_start; defaults until then). */
+  let config: AdxConfig = {}
 
   // ------------------------------------------------------------------ flag
   // `pi --adx-auto "goal: point 1, point 2, ..."` runs the whole pipeline
@@ -66,14 +69,17 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     pi,
     notify: (msg, level) => ctx?.ui.notify(msg, level ?? 'info'),
     updateWidget: () => {
+      if (config.showWidget === false) return
       if (ctx) refreshFlowWidget(ctx)
     },
+    widgetEnabled: () => config.showWidget !== false,
     // Filled in once a ctx is available (session_start)
   })
 
   // ------------------------------------------------------------------ tools
   pi.registerTool(
     createFlowMetaTool(() => {
+      if (config.showWidget === false) return
       if (ctx) refreshFlowWidget(ctx)
     }),
   )
@@ -88,9 +94,16 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // (a dismissed prompt = skip → proceed with best judgment).
   pi.registerTool(createAskUserTool())
 
+  /** Apply the config's skipReview default to launch args (explicit args win). */
+  function withConfigDefaults(rawArgs: string): string {
+    if (config.skipReview !== true) return rawArgs
+    if (rawArgs.includes('skip_review')) return rawArgs
+    return rawArgs ? `skip_review=true ${rawArgs}` : 'skip_review=true'
+  }
+
   // Planning-complete hand-off: in auto mode it exits plan mode and launches
-  // the full build-verify pipeline (no review); in manual mode it only
-  // reminds the user to run /adx-build.
+  // the full build-verify pipeline (no review); in interactive mode the user
+  // picks the pipeline/workspace via a picker.
   pi.registerTool(
     createFlowPlanDoneTool(async () => {
       const c = ctx
@@ -112,7 +125,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         return
       }
       let workflow = mode.startsWith('Build + verify') ? 'build-verify' : 'build'
-      let args = ''
+      let args = workflow === 'build-verify' ? withConfigDefaults('') : ''
       if (mode === 'Choose workspace') {
         const loc = await c.ui.select('adx: where to work?', [
           'Work in current workspace',
@@ -131,7 +144,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
           return
         }
         workflow = which.startsWith('Build + verify') ? 'build-verify' : 'build'
-        args = `worklocation=${loc.startsWith('Work in current') ? 'current' : 'new'}`
+        const locArg = `worklocation=${loc.startsWith('Work in current') ? 'current' : 'new'}`
+        args = workflow === 'build-verify' ? withConfigDefaults(locArg) : locArg
       }
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       c.ui.notify(`adx: launching ${workflow === 'build-verify' ? 'build-verify' : 'build'}${args ? ` (${args})` : ''}`, 'info')
@@ -173,7 +187,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (args, c) => {
       ctx = c
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      await executor.launch('build', c, args)
+      const workflow = config.defaultBuildWorkflow === 'build-verify' ? 'build-verify' : 'build'
+      await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(args) : args)
     },
   })
   pi.registerCommand('adx-build-verify', {
@@ -181,7 +196,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (args, c) => {
       ctx = c
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      await executor.launch('build-verify', c, args)
+      await executor.launch('build-verify', c, withConfigDefaults(args))
     },
   })
 
@@ -206,7 +221,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (_args, c) => {
       ctx = c
       await executor.cancel(c)
-      clearFlowWidget(c)
+      if (config.showWidget !== false) clearFlowWidget(c)
     },
   })
 
@@ -222,15 +237,20 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // ------------------------------------------------------------------ events
   pi.on('session_start', async (_event, c) => {
     ctx = c
+    config = loadConfig(c.cwd)
     // Restore any persisted run (e.g. after a pi restart)
     const state = await loadState(c.cwd)
     if (state.execution && state.execution.status !== 'done') {
       c.ui.notify(`adx: restoring workflow "${state.execution.workflowName}" (status: ${state.execution.status})`, 'info')
       await executor.restore(state, c)
-    } else if (pi.getFlag('adx-auto')) {
+    } else if (pi.getFlag('adx-auto') === true || config.autoMode === true) {
       // Unattended pipeline: straight into plan mode (refine the provided
       // points, then flow_plan_done hands off to build-verify automatically).
+      // CLI flag wins; config.autoMode is its persistent equivalent.
       autoMode = true
+      enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    } else if (config.defaultPlanMode === true) {
+      // Config: start every session in plan mode (user-driven hand-off).
       enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
     }
   })
