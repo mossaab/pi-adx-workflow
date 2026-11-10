@@ -203,8 +203,8 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 - Once you understand the goal fully (no more clarifying questions), present the proposed criteria as a single numbered recap and ask the user — via the ask_user tool (type "text") — to approve: "Do you validate these points, or should any be removed or adjusted?" The turn pauses until they answer.
 - On confirmation (applying any requested removals/adjustments), add the final criteria with flow_meta (action "add", key "criteria") — one entry per point, exactly as agreed.
 - After adding, refining or removing ANY criterion, re-present the COMPLETE current criteria list as a single recap: every criterion, numbered, with its status. First check the full list with flow_meta (action "get", key "criteria"). Never write an incremental recap of only the new/changed items — there should always be exactly one complete recap of all points.
-- Present the criteria plainly and stop there.
-- Never ask "Shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question. (Asking the user to approve the points themselves, above, is expected.)
+- After the final criteria are in the store and the complete recap is presented, call flow_plan_done — it hands off to the build phase (in interactive mode the user picks the pipeline/workspace; in auto mode the pipeline starts automatically). Do not stop before calling it.
+- Never ask "Shall I switch to build?" — the hand-off is driven by flow_plan_done (interactive picker) or by the user (/adx-build), not by your question. (Asking the user to approve the points themselves, above, is expected.)
 - Do not call flow_step_done in plan mode; it is only used inside a running workflow step.
 - If you must stop mid-step (for example context pressure), first record where you stopped and the exact next action with flow_meta (action "add", key "resume", description "..."), then stop. You will be auto-continued with that note.
 `

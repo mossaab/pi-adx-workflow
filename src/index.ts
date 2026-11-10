@@ -99,9 +99,43 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
         c.ui.notify('adx: auto mode — planning complete, launching build-verify (no review)', 'info')
         await executor.launch('build-verify', c, 'auto=true skip_review=true')
-      } else {
-        c.ui.notify('adx: planning complete — run /adx-build to start building', 'info')
+        return
       }
+      // Interactive mode: pick the next step (pipeline + workspace).
+      const mode = await c.ui.select('adx: planning complete — how to proceed?', [
+        'Build + verify (full pipeline)',
+        'Build (simple)',
+        'Choose workspace',
+      ])
+      if (mode === undefined) {
+        c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
+        return
+      }
+      let workflow = mode.startsWith('Build + verify') ? 'build-verify' : 'build'
+      let args = ''
+      if (mode === 'Choose workspace') {
+        const loc = await c.ui.select('adx: where to work?', [
+          'Work in current workspace',
+          'Start a new workspace (worktree)',
+        ])
+        if (loc === undefined) {
+          c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
+          return
+        }
+        const which = await c.ui.select('adx: which pipeline?', [
+          'Build + verify (full pipeline)',
+          'Build (simple)',
+        ])
+        if (which === undefined) {
+          c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
+          return
+        }
+        workflow = which.startsWith('Build + verify') ? 'build-verify' : 'build'
+        args = `worklocation=${loc.startsWith('Work in current') ? 'current' : 'new'}`
+      }
+      exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      c.ui.notify(`adx: launching ${workflow === 'build-verify' ? 'build-verify' : 'build'}${args ? ` (${args})` : ''}`, 'info')
+      await executor.launch(workflow, c, args)
     }),
   )
 

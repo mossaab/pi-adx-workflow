@@ -18,6 +18,8 @@
       "phase": "build",
       "transitions": [
         { "when": { "type": "param", "key": "auto", "value": "true" }, "goto": "build" },
+        { "when": { "type": "param", "key": "worklocation", "value": "current" }, "goto": "build" },
+        { "when": { "type": "param", "key": "worklocation", "value": "new" }, "goto": "setup_workspace" },
         {
           "when": { "type": "step_result", "result": "Work in current workspace" },
           "goto": "build"

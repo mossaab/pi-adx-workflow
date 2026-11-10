@@ -81,6 +81,9 @@ pi --adx-auto "Add a dark mode toggle: - toggle in settings, - persist to localS
    mode; use `/adx-build-verify` for the full pipeline with review.
 
 Manual mode (`/adx-plan` + `/adx-build` / `/adx-build-verify`) is unchanged.
+When the planner finishes in interactive mode it calls `flow_plan_done`, which
+shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
+**Choose workspace** (current workspace or fresh worktree, then the pipeline).
 
 Typical session:
 

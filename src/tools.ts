@@ -190,7 +190,8 @@ export function createFlowPlanDoneTool(onPlanDone: () => Promise<void>) {
     label: 'Plan Done',
     description:
       'Signal that planning is complete: every final acceptance criterion has been added with flow_meta (key "criteria"). ' +
-      'In auto mode the workflow continues automatically to build; in manual mode it only notifies the user to run /adx-build. ' +
+      'In auto mode the workflow continues automatically to build; in interactive mode the user is offered a picker ' +
+      '(build + verify / build simple / choose workspace). ' +
       'Call it once, after the complete criteria recap is presented.',
     promptSnippet: 'Mark planning complete so the workflow can continue to build',
     promptGuidelines: [

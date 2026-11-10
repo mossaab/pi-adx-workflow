@@ -13,6 +13,12 @@
         "required": false
       },
       {
+        "id": "worklocation",
+        "label": "Work location",
+        "description": "'current' = work in the current workspace, 'new' = set up a fresh worktree",
+        "required": false
+      },
+      {
         "id": "skip_review",
         "label": "Skip review",
         "description": "Set to 'true' to skip the code review + finalize steps (verify only)",
@@ -32,6 +38,8 @@
       "phase": "build",
       "transitions": [
         { "when": { "type": "param", "key": "auto", "value": "true" }, "goto": "build" },
+        { "when": { "type": "param", "key": "worklocation", "value": "current" }, "goto": "build" },
+        { "when": { "type": "param", "key": "worklocation", "value": "new" }, "goto": "setup_workspace" },
         {
           "when": { "type": "step_result", "result": "Work in current workspace" },
           "goto": "build"
