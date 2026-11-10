@@ -8,7 +8,7 @@
   },
   "entryStep": "work_location",
   "settings": {
-    "maxIterations": 12
+    "maxIterations": 50
   },
   "steps": [
     {
@@ -45,7 +45,7 @@
       "type": "agent",
       "phase": "build",
       "agentId": "builder",
-      "prompt": "Implement the task and make sure you fulfil the {{criteriaCount}} criteria. Mark each criterion as complete using flow_meta (key \"criteria\", action \"update\", status \"completed\").\n\nNote: **Do not** run the verifier or code reviewer yourself — both run automatically later in this workflow (verify → code review) with the full diff in context; doing it here duplicates work. Do NOT spawn, resume, steer or manage subagents with the `subagent` tool: if a verification reports a failure, just fix the code (or re-assert the criterion) and call flow_step_done — the workflow re-runs the verifier automatically.",
+      "prompt": "Implement the task and make sure you fulfil the {{criteriaCount}} criteria. Mark each criterion as complete using flow_meta (key \"criteria\", action \"update\", status \"completed\").\n\nBefore marking, check the current statuses with flow_meta (action \"get\", key \"criteria\") and update the existing criteria by id — do NOT re-add criteria that already exist: duplicates keep the completion check from ever passing.\n\nNote: **Do not** run the verifier or code reviewer yourself — both run automatically later in this workflow (verify → code review) with the full diff in context; doing it here duplicates work. Do NOT spawn, resume, steer or manage subagents with the `subagent` tool: if a verification reports a failure, just fix the code (or re-assert the criterion) and call flow_step_done — the workflow re-runs the verifier automatically.",
       "nudgePrompt": "Continue working on the acceptance criteria. {{reason}}.\n\n{{verifierFindings}}\nFix the issues above, then mark each failed criterion as **completed** using flow_meta (key \"criteria\", action \"update\", status \"completed\"). Do not use \"passed\" — that status is set by the verifier, not by you. Do not touch criteria already marked **passed** — never downgrade a passed criterion.",
       "transitions": [
         {

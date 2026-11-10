@@ -637,8 +637,27 @@ export class AdxExecutor {
       (t) => t.when.type === 'metadata_all_match' || t.when.type === 'metadata_all_in' ? t.when.key === 'criteria' : false,
     )
     if (step.id === 'build' || onCriteria) {
-      const pending = pendingCriteriaCount(state)
-      if (pending > 0) return `${pending} criteria remaining`
+      // Count only the criteria that block THIS step's gate (statuses outside
+      // the gate's accepted values). During "build" that is the "pending"
+      // ones only — "passed" is set later by the verifier, so counting
+      // non-passed criteria here would report a number that can never reach
+      // zero in-step (stale "N criteria remaining" nudge loop).
+      const gate = transitions.find(
+        (t) =>
+          (t.when.type === 'metadata_all_match' || t.when.type === 'metadata_all_in') &&
+          t.when.key === 'criteria',
+      )
+      if (gate && (gate.when.type === 'metadata_all_match' || gate.when.type === 'metadata_all_in')) {
+        const accepted =
+          gate.when.type === 'metadata_all_match' ? [gate.when.value] : gate.when.values
+        const entries = state.metadata['criteria'] ?? []
+        const blocking = entries.filter((e) => !accepted.includes(e.status))
+        if (blocking.length > 0)
+          return `${blocking.length} criteria not yet ${accepted.join(' / ')}`
+      } else {
+        const pending = pendingCriteriaCount(state)
+        if (pending > 0) return `${pending} criteria remaining`
+      }
     }
     const onFindings = transitions.some(
       (t) => t.when.type === 'metadata_all_match' || t.when.type === 'metadata_all_in' ? t.when.key === 'review_findings' : false,

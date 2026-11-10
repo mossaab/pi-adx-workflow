@@ -196,7 +196,7 @@ await fm({ action: 'update', key: 'criteria', id: '2', status: 'completed' })
 await executor.onStepDone({})
 check(
   'verifier failed a criterion → nudged back to build',
-  userMessages.some((m) => m.includes('criteria remaining') && m.includes('Verification pass 1')),
+  userMessages.some((m) => m.includes('not yet completed / passed') && m.includes('Verification pass 1')),
 )
 check(
   'stopped sub-agent was resumed (never-stop)',
@@ -208,7 +208,7 @@ check(
 )
 check(
   'verify→build re-entry (nudgePrompt) sent with deliverAs: followUp (busy-safe)',
-  userMessageOpts[userMessages.findIndex((m) => m.includes('criteria remaining'))]?.deliverAs === 'followUp',
+  userMessageOpts[userMessages.findIndex((m) => m.includes('not yet completed / passed'))]?.deliverAs === 'followUp',
 )
 
 // LLM fixes, marks completed again
@@ -290,7 +290,7 @@ check(
 )
 
 // Blocked path: the unsatisfiable criterion keeps verify failing → the
-// build↔verify loop burns maxIterations (12) → $blocked
+// build↔verify loop burns maxIterations (50) → $blocked
 for (let i = 0; i < 30 && readState().execution?.status === 'running'; i++) {
   const st = readState()
   for (const c of st.metadata['criteria']) {
