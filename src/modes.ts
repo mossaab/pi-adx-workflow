@@ -199,10 +199,12 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 - Explore the codebase with read-only actions when needed.
 - Web & system diagnostics: you may start a dev server (npm run dev in the background), take a headless screenshot (npx playwright screenshot <url> /tmp/shot.png), probe ports (lsof -i :PORT), then stop only the processes you started (kill <pid> / pkill -f <pattern>). Keep all artifacts in /tmp — plan mode must not modify the project.
 - If a bash command is rejected by the plan-mode allowlist, it is NOT fatal: retry with a simpler read-only variant (plain ls without flags, no && chains, pipes, or file redirects) or proceed with what you already know. Never stop your turn because of a blocked command.
-- Add each acceptance criterion with flow_meta (action "add", key "criteria"): a self-contained, verifiable description of what needs to be done AND how to verify it.
+- Draft the acceptance criteria as you understand the goal: a self-contained, verifiable description of what needs to be done AND how to verify it. Do NOT add them to the store yet.
+- Once you understand the goal fully (no more clarifying questions), present the proposed criteria as a single numbered recap and ask the user — via the ask_user tool (type "text") — to approve: "Do you validate these points, or should any be removed or adjusted?" The turn pauses until they answer.
+- On confirmation (applying any requested removals/adjustments), add the final criteria with flow_meta (action "add", key "criteria") — one entry per point, exactly as agreed.
 - After adding, refining or removing ANY criterion, re-present the COMPLETE current criteria list as a single recap: every criterion, numbered, with its status. First check the full list with flow_meta (action "get", key "criteria"). Never write an incremental recap of only the new/changed items — there should always be exactly one complete recap of all points.
 - Present the criteria plainly and stop there.
-- Never ask "Do you approve these criteria and shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question.
+- Never ask "Shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question. (Asking the user to approve the points themselves, above, is expected.)
 - Do not call flow_step_done in plan mode; it is only used inside a running workflow step.
 - If you must stop mid-step (for example context pressure), first record where you stopped and the exact next action with flow_meta (action "add", key "resume", description "..."), then stop. You will be auto-continued with that note.
 `
