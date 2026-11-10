@@ -31,8 +31,9 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 
 // ============================================================================
 // Agent definitions
@@ -134,10 +135,14 @@ function resolvePiBin(): string | undefined {
   return 'pi'
 }
 /** Our extension entry (the child loads it with -e to get flow_meta). */
-function resolveExtensionPath(): string | undefined {
+export function resolveExtensionPath(): string | undefined {
   if (process.env.ADX_EXTENSION_PATH) return process.env.ADX_EXTENSION_PATH
-  const auto = join(homedir(), '.pi', 'agent', 'extensions', 'adx-workflow', 'src', 'index.ts')
-  return existsSync(auto) ? auto : undefined
+  // Own entry: works for dev symlinks, git/npm package installs, and local paths.
+  const self = join(dirname(fileURLToPath(import.meta.url)), 'index.ts')
+  if (existsSync(self)) return self
+  // Legacy dev symlink
+  const legacy = join(homedir(), '.pi', 'agent', 'extensions', 'adx-workflow', 'src', 'index.ts')
+  return existsSync(legacy) ? legacy : undefined
 }
 
 // ============================================================================
@@ -163,7 +168,7 @@ export function spawnFlowAgent(
     return Promise.resolve({
       ok: false,
       runId,
-      error: `adx extension entry not found (looked for ADX_EXTENSION_PATH / ${join(
+      error: `adx extension entry not found (looked for ADX_EXTENSION_PATH, the extension's own entry, or ${join(
         homedir(),
         '.pi/agent/extensions/adx-workflow/src/index.ts',
       )})`,

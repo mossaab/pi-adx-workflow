@@ -1,5 +1,8 @@
 # pi-adx-workflow
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![pi-coding-agent](https://img.shields.io/badge/pi-coding-agent-%E2%89%A51.5-blueviolet.svg)](https://github.com/badri/pi)
+
 **plan → build/verify → review → summarize** workflow for
 [pi-coding-agent](https://github.com/badri/pi), built as a pi extension with
 **in-house sub-agent propagation**: flow children (verifier / code reviewer)
@@ -23,33 +26,77 @@ The whole run is a declarative state machine: steps, ordered transitions,
 metadata conditions, nudge re-entry, `maxIterations` safety cap,
 `$blocked` handling, and persistence/resume.
 
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Never-stop (auto-continue)](#never-stop-auto-continue)
+- [Tools](#tools)
+- [Sub-agents](#sub-agents)
+- [Workflows](#workflows)
+- [Development](#development)
+- [Contributing](#contributing)
+- [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout)
+- [License](#license)
+
 ## Requirements
 
-- pi-coding-agent (the `pi` CLI is resolved from `~/.pi/agent/bin/pi`,
-  `ADX_PI_BIN`, or `PATH`)
+- pi-coding-agent **≥ 1.5** (the `pi` CLI is resolved from
+  `~/.pi/agent/bin/pi`, `ADX_PI_BIN`, or `PATH`)
+- Node **≥ 22.19** (pi's own engine requirement)
 
 pi-subagents is **not** required: children are plain `pi -p` processes that
 load only this extension (child mode), so there is no retained-child state
 and no "Agent is already processing" jams.
 
+No `npm install` is needed for the extension itself: its runtime imports
+(`typebox`, `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`) are
+**host-provided** — pi maps them to its own copies, so the extension shares
+pi's classes and registries (declared as `peerDependencies` with a `*` range,
+per the pi package conventions).
+
 ## Install
 
-The repo is already symlinked as a global pi extension:
+Recommended: install as a [pi package](https://github.com/badri/pi) from git:
 
 ```sh
-ls -l ~/.pi/agent/extensions/adx-workflow
-# -> ~/projects/pi-adx-workflow
+pi install git:github.com/mossaab/pi-adx-workflow
 ```
 
-If you move the repo, re-create the symlink:
+Variants:
 
 ```sh
-ln -sfn ~/projects/pi-adx-workflow ~/.pi/agent/extensions/adx-workflow
+# project-local (written to .pi/settings.json, loads after project trust)
+pi install --local git:github.com/mossaab/pi-adx-workflow
+
+# from npm (once published)
+pi install npm:pi-adx-workflow
 ```
 
-No build step: pi loads `src/index.ts` through jiti. Dependencies
-(`typebox`, `@earendil-works/pi-ai`) resolve from the pi install's
-`node_modules` (a symlink is provided in this repo).
+Manage the install:
+
+```sh
+pi list                                    # show configured packages
+pi remove git:github.com/mossaab/pi-adx-workflow
+pi update --extensions                     # reconcile git checkouts / npm specs
+```
+
+### Development install (symlink)
+
+To develop the extension, clone the repo and symlink it into pi's global
+extension directory (pi discovers `package.json` with a `pi.extensions`
+field one level deep):
+
+```sh
+git clone https://github.com/mossaab/pi-adx-workflow.git
+ln -sfn ~/path/to/pi-adx-workflow ~/.pi/agent/extensions/adx-workflow
+```
+
+No build step: pi loads `src/index.ts` through jiti. If you move the repo,
+re-create the symlink.
 
 ## Usage
 
@@ -81,9 +128,29 @@ pi --adx-auto "Add a dark mode toggle: - toggle in settings, - persist to localS
    mode; use `/adx-build-verify` for the full pipeline with review.
 
 Manual mode (`/adx-plan` + `/adx-build` / `/adx-build-verify`) is unchanged.
+
 When the planner finishes in interactive mode it calls `flow_plan_done`, which
 shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
 **Choose workspace** (current workspace or fresh worktree, then the pipeline).
+
+### Typical session
+
+1. `/adx-plan`
+2. Ask for a feature: *"Add a dark mode toggle. Use flow_meta to define the
+   acceptance criteria."* — the planner explores (read-only) and adds
+   criteria. Review them in the widget (or edit with `flow_meta`).
+3. `/adx-build` (quick: `build → summarize`) or `/adx-build-verify`
+   (full: `work_location → build → verify → code_review → finalize → summarize`).
+   The widget tracks step, iteration, and criterion status; the footer shows
+   a compact status line.
+4. When a criterion fails verification, the builder is nudged with the
+   verifier's findings and re-enters `build` until everything is `passed`.
+5. The reviewer's findings are dispositioned in `finalize`, then the summary
+   with "What to test" is printed.
+
+State lives in `.pi/adx-flow/state.json` (criteria, findings, execution
+state). It survives pi restarts — `session_start` restores a running run, and
+`/adx-resume` continues a blocked one.
 
 ## Configuration
 
@@ -94,6 +161,7 @@ defaults, ready to edit:
 - project: `<cwd>/.pi/adx-workflow.json` (optional, overrides user per key)
 
 All keys optional, unknown keys ignored, malformed file = defaults.
+
 You can also manage it from inside pi:
 
 ```
@@ -125,25 +193,6 @@ You can also manage it from inside pi:
 | `autoMode` | `false` | Persistent `--adx-auto`: unattended plan → build → verify → recap (the CLI flag still wins when passed) |
 | `skipReview` | `false` | Default `skip_review=true` for the build-verify pipeline (picker + `/adx-build-verify`); an explicit `skip_review=` in the command args wins |
 | `defaultBuildWorkflow` | `"build"` | Which workflow `/adx-build` launches: `"build"` (simple) or `"build-verify"` (full) |
-
-Typical session:
-
-1. `/adx-plan`
-2. Ask for a feature: *"Add a dark mode toggle. Use flow_meta to define the
-   acceptance criteria."* — the planner explores (read-only) and adds
-   criteria. Review them in the widget (or edit with `flow_meta`).
-3. `/adx-build` (quick: `build → summarize`) or `/adx-build-verify`
-   (full: `work_location → build → verify → code_review → finalize → summarize`).
-   The widget tracks step, iteration, and criterion status; the footer shows
-   a compact status line.
-4. When a criterion fails verification, the builder is nudged with the
-   verifier's findings and re-enters `build` until everything is `passed`.
-5. The reviewer's findings are dispositioned in `finalize`, then the summary
-   with "What to test" is printed.
-
-State lives in `.pi/adx-flow/state.json` (criteria, findings, execution
-state). It survives pi restarts — `session_start` restores a running run, and
-`/adx-resume` continues a blocked one.
 
 ## Never-stop (auto-continue)
 
@@ -216,9 +265,15 @@ Workflow files are plain JSON state machines: `workflows/*.workflow.json`
 (bundled), overridable per project in `.pi/adx-workflows/` (highest
 precedence) and per user in `~/.pi/agent/workflows/`.
 
-- `build-verify` — the default pipeline (above)
+Three workflows are bundled:
+
+- `build` — **simple**: `work_location → build → summarize`. No automated
+  verification, no code review; the builder self-checks before marking
+  criteria complete. Launched by `/adx-build`.
+- `build-verify` — **the full pipeline** (default for `/adx-build-verify`):
+  `work_location → build → verify → code_review → finalize → summarize`.
 - `pr-review` — PR review + fixes + squash-merge (requires `gh`), launched
-  with `pr_number`
+  with `pr_number`.
 
 ### Authoring reference (short)
 
@@ -242,6 +297,67 @@ Full semantics: this extension is a self-contained declarative workflow
 engine — steps, ordered transitions, metadata conditions, nudge re-entry,
 `maxIterations` safety cap, `$blocked` handling, persistence and resume.
 
+## Development
+
+```sh
+git clone https://github.com/mossaab/pi-adx-workflow.git
+cd pi-adx-workflow
+npm install            # dev dependencies only (typescript, @types/node)
+npm run setup-dev      # link host-provided packages (typebox, @earendil-works/*)
+                       # from your pi install into node_modules
+
+npm run smoke          # jiti-load the extension with a fake ExtensionAPI
+npm run e2e            # drive the full build-verify pipeline with fake pi + fake sub-agents
+npm run typecheck      # tsc --noEmit (strict)
+```
+
+`npm run setup-dev` replicates pi's runtime resolution: it symlinks the
+host-provided packages (`typebox`, `@earendil-works/*`) from your pi install
+into the local `node_modules/`, so the dev commands work from a fresh clone.
+Re-run it if your pi install location changes (or use `ADX_FLOW_JITI` below).
+
+The test scripts load TypeScript the same way pi does (via jiti). They find
+jiti from your pi install — `~/.pi/agent/install/releases/<newest>/node_modules/jiti` —
+with no hard-coded paths. Override the lookup with
+`ADX_FLOW_JITI=/path/to/node_modules/jiti` if your layout is unusual.
+
+Extension development loop: symlink the repo into
+`~/.pi/agent/extensions/` (see [Install](#development-install-symlink)), edit
+`src/*.ts`, and restart pi (or `/reload`) — jiti loads the TypeScript
+directly, no build step.
+
+## Contributing
+
+Contributions are welcome — fork, branch, and open a pull request.
+
+- **TypeScript, strict mode, no build step** — the extension ships as
+  TypeScript loaded by pi's jiti; keep it that way.
+- **Workflow engine changes**: extend `scripts/e2e-executor.mjs` — it drives
+  the whole pipeline (nudge loops, verify/review sub-agents, resume,
+  maxIterations blocking) against a fake pi, so it catches regressions fast.
+- **New workflows**: plain JSON state machines in `workflows/` (schema in
+  `src/types.ts`); see the [authoring reference](#authoring-reference-short).
+- **Docs**: README sections mirror the feature set — update both together.
+
+## Troubleshooting
+
+- **`pi` CLI not found** — point the extension at it: `export ADX_PI_BIN=/path/to/pi`
+  (or install pi-coding-agent so `~/.pi/agent/bin/pi` exists).
+- **Flow children using a model you don't want** — pin one:
+  `export ADX_FLOW_MODEL=<provider/model>`.
+- **Config not taking effect** — run `/adx-config` to see the effective
+  config and which files were read. Note: `defaultPlanMode` / `autoMode`
+  apply from the *next* session; the rest apply immediately.
+- **"Agent is already processing"** — structurally impossible here: flow
+  children are isolated `pi -p` processes with fresh sessions, so no stuck
+  retained child can block later spawns. A hung child is killed by the
+  15-minute timeout and revived by the never-stop resume.
+- **Package install fails at startup** (e.g. offline) — pi warns, skips the
+  package, and retries on the next start or `/reload`; `pi update --extensions`
+  reports the failure explicitly.
+- **Dev scripts can't find jiti** — set `ADX_FLOW_JITI` to your jiti install
+  path (see [Development](#development)).
+
 ## Project layout
 
 ```
@@ -257,7 +373,16 @@ src/
 ├── widgets.ts        # TUI widget (criteria checklist, step, findings)
 └── workflows.ts      # workflow loading (project > user > bundled)
 workflows/
+├── build.workflow.json
 ├── build-verify.workflow.json
 └── pr-review.workflow.json
-scripts/smoke-load.mjs
+scripts/
+├── find-jiti.mjs     # locate jiti in your pi install (used by the dev scripts)
+├── setup-dev.mjs     # npm run setup-dev (link host-provided packages)
+├── smoke-load.mjs    # npm run smoke
+└── e2e-executor.mjs  # npm run e2e
 ```
+
+## License
+
+[MIT](./LICENSE) © mossaab

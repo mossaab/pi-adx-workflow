@@ -6,18 +6,16 @@
  * sub-agent (failed → passed) → code reviewer sub-agent → finalize loop →
  * summarize → $done, with persistence and widget refreshes.
  */
-import { createRequire } from 'node:module'
+import { fileURLToPath } from 'node:url'
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createJitiFromPi } from './find-jiti.mjs'
 
-const require = createRequire(
-  '/Users/mossaab/.pi/agent/install/releases/1.5.1/node_modules/jiti/',
-)
-const { createJiti } = require('jiti')
+const createJiti = createJitiFromPi()
 const jiti = createJiti(import.meta.url, { cache: false, interopDefault: true })
 
-const srcDir = '/Users/mossaab/projects/pi-adx-workflow/src'
+const srcDir = fileURLToPath(new URL('../src/', import.meta.url))
 const { AdxExecutor } = await jiti.import(join(srcDir, 'executor.ts'))
 const { createFlowMetaTool } = await jiti.import(join(srcDir, 'tools.ts'))
 

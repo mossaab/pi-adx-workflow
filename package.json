@@ -1,13 +1,46 @@
 {
   "name": "pi-adx-workflow",
   "version": "0.1.0",
-  "description": "plan → build/verify → review → summarize workflow for pi-coding-agent (extension + pi-subagents).",
+  "description": "plan → build/verify → review → summarize workflow for pi-coding-agent, with in-house sub-agent propagation.",
   "type": "module",
-  "private": true,
+  "license": "MIT",
+  "author": "mossaab",
+  "homepage": "https://github.com/mossaab/pi-adx-workflow",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mossaab/pi-adx-workflow.git"
+  },
+  "keywords": [
+    "pi",
+    "pi-coding-agent",
+    "pi-extension",
+    "pi-package",
+    "workflow",
+    "subagent",
+    "acceptance-criteria",
+    "verification",
+    "code-review"
+  ],
+  "files": [
+    "src",
+    "workflows",
+    "README.md"
+  ],
+  "scripts": {
+    "setup-dev": "node scripts/setup-dev.mjs",
+    "smoke": "node scripts/smoke-load.mjs",
+    "e2e": "node scripts/e2e-executor.mjs",
+    "typecheck": "tsc --noEmit"
+  },
   "pi": {
     "extensions": [
       "./src/index.ts"
     ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
