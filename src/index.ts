@@ -30,6 +30,7 @@ import {
 } from './modes.js'
 import { loadState } from './store.js'
 import { refreshFlowWidget, clearFlowWidget } from './widgets.js'
+import { createAskUserTool } from './ask-user.js'
 
 // The executor is wired in step 6; keep a mutable handle so index.ts can
 // forward commands/tools without a circular import.
@@ -70,6 +71,10 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       await executor.onStepDone(info)
     }),
   )
+  // OpenFox-style structured question tool (plan-mode clarification):
+  // choice / confirm / text dialogs pause the turn until the user answers
+  // (a dismissed prompt = skip → proceed with best judgment).
+  pi.registerTool(createAskUserTool())
 
   // ------------------------------------------------------------------ mode helpers
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
