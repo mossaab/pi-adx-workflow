@@ -53,7 +53,9 @@ const DESTRUCTIVE_PATTERNS = [
   /\btruncate\b/i,
   /\bdd\b/i,
   /\bshred\b/i,
-  /(^|[^<])>(?!>)/,
+  // Output redirects — but `2>&1` (stderr to stdout) is not destructive:
+  // a `>` followed by `&` is allowed, real file redirects ("> file", "2> /dev/null") are not.
+  /(^|[^<])>(?!&)/,
   />>/,
   /\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
   /\byarn\s+(add|remove|install|publish)/i,
@@ -115,7 +117,7 @@ const SAFE_PATTERNS = [
   /^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
   /^\s*yarn\s+(list|info|why|audit)/i,
   /^\s*node\s+--version/i,
-  /^\s*python\s+--version/i,
+  /^\s*python3?\s+--version/i,
   /^\s*curl\s/i,
   /^\s*wget\s+-O\s*-/i,
   /^\s*jq\b/,
@@ -157,6 +159,7 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 
 - Understand the user's goal before locking in details.
 - Explore the codebase with read-only actions when needed.
+- If a bash command is rejected by the plan-mode allowlist, it is NOT fatal: retry with a simpler read-only variant (plain ls without flags, no && chains, pipes, or redirects — e.g. avoid 2>&1 and 2>/dev/null) or proceed with what you already know. Never stop your turn because of a blocked command.
 - Add each acceptance criterion with flow_meta (action "add", key "criteria"): a self-contained, verifiable description of what needs to be done AND how to verify it.
 - Present the criteria plainly and stop there.
 - Never ask "Do you approve these criteria and shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question.
