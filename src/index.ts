@@ -255,24 +255,34 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
           return
         }
         const scope: 'user' | 'project' = scopeLabel.startsWith('User') ? 'user' : 'project'
-        const keyLabel = await c.ui.select('adx config: which setting?', keys.map((k) => `${k} = ${String(effective[k])}`))
-        if (keyLabel === undefined) {
-          c.ui.notify('adx config: cancelled', 'info')
-          return
+        // Loop: after each change, back to the setting menu (updated values).
+        // "Done" exits the menu.
+        let changed = 0
+        const DONE = 'Done (save & exit)'
+        while (true) {
+          const keyLabel = await c.ui.select(
+            'adx config: which setting?',
+            [...keys.map((k) => `${k} = ${String(effective[k])}`), DONE],
+          )
+          if (keyLabel === undefined || keyLabel === DONE) break
+          const key = keyLabel.split(' = ')[0] as keyof AdxConfig
+          const valLabel = await c.ui.select(`adx config: value for ${key}?`, valuesFor(key))
+          if (valLabel === undefined) continue // cancelled the value picker → pick again
+          const value = toValue(valLabel)
+          ;(effective as Record<string, boolean | string>)[key] = value
+          setConfigValue(c.cwd, key, value, scope)
+          config = loadConfig(c.cwd)
+          changed += 1
+          c.ui.notify(`adx: ${scope} config: ${key}=${String(value)}`, 'info')
         }
-        const key = keyLabel.split(' = ')[0] as keyof AdxConfig
-        const valLabel = await c.ui.select(`adx config: value for ${key}?`, valuesFor(key))
-        if (valLabel === undefined) {
-          c.ui.notify('adx config: cancelled', 'info')
-          return
+        if (changed > 0) {
+          c.ui.notify(
+            `adx: ${scope} config updated (${changed} change${changed > 1 ? 's' : ''}) — showWidget/skipReview/defaultBuildWorkflow apply now; plan/auto modes next session`,
+            'info',
+          )
+        } else {
+          c.ui.notify('adx config: no changes', 'info')
         }
-        const value = toValue(valLabel)
-        setConfigValue(c.cwd, key, value, scope)
-        config = loadConfig(c.cwd)
-        c.ui.notify(
-          `adx: ${scope} config updated: ${key}=${String(value)} (showWidget/skipReview/defaultBuildWorkflow apply now; plan/auto modes next session)`,
-          'info',
-        )
         return
       }
 
