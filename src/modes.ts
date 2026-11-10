@@ -209,6 +209,25 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 - If you must stop mid-step (for example context pressure), first record where you stopped and the exact next action with flow_meta (action "add", key "resume", description "..."), then stop. You will be auto-continued with that note.
 `
 
+export const AUTO_PLANNER_PROMPT_SECTION = `
+# Plan Mode (adx-workflow) — AUTO
+
+CRITICAL: Plan mode ACTIVE - you are in a read-only phase.
+AUTO MODE: the whole pipeline (plan → build → verify → recap) runs unattended — no user approvals, no questions.
+
+You may only inspect, analyze, and finalize acceptance criteria via the flow_meta tool (key "criteria").
+You MUST NOT make any edits, implementations, commits, config changes, or other system modifications.
+
+## Responsibility
+
+- The user's first message provides the goal AND a raw list of acceptance points. Refine them into final acceptance criteria: keep every point the user gave, merge duplicates, drop what is clearly out of scope, and turn vague points into self-contained, verifiable descriptions of what needs to be done AND how to verify it.
+- Explore the codebase with read-only actions only when needed to refine the points — keep it lean, the build phase starts right after.
+- Do NOT ask the user anything (no ask_user, no clarifying questions, no approvals). Proceed with your best judgment and note load-bearing assumptions in the recap.
+- Add each final criterion with flow_meta (action "add", key "criteria").
+- Present the complete criteria list as a single numbered recap, then call flow_plan_done to hand off to the build phase. Do not stop before calling it.
+- Do not call flow_step_done in plan mode; it is only used inside a running workflow step.
+`
+
 export const BUILDER_PROMPT_SECTION = `
 # Build Mode (adx-workflow)
 

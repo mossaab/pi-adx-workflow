@@ -64,6 +64,24 @@ No build step: pi loads `src/index.ts` through jiti. Dependencies
 Ctrl+Alt+A                   toggle plan mode
 ```
 
+### Auto mode (unattended pipeline)
+
+```
+pi --adx-auto "Add a dark mode toggle: - toggle in settings, - persist to localStorage, - follow system preference"
+```
+
+`--adx-auto` runs the whole pipeline without any approval:
+
+1. **Plan** — the planner refines the acceptance points you provided into
+   final criteria (no questions, no validation step) and adds them to the store.
+2. **Build** — plan mode exits automatically and the build-verify workflow
+   launches (user steps like the work-location picker are auto-skipped).
+3. **Verify → recap** — the verifier checks the criteria, then the summary
+   with "What to test" is printed. The code review step is skipped in auto
+   mode; use `/adx-build-verify` for the full pipeline with review.
+
+Manual mode (`/adx-plan` + `/adx-build` / `/adx-build-verify`) is unchanged.
+
 Typical session:
 
 1. `/adx-plan`

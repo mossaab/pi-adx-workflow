@@ -17,6 +17,7 @@
       "type": "user",
       "phase": "build",
       "transitions": [
+        { "when": { "type": "param", "key": "auto", "value": "true" }, "goto": "build" },
         {
           "when": { "type": "step_result", "result": "Work in current workspace" },
           "goto": "build"

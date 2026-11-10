@@ -7,6 +7,12 @@
     "color": "#3b82f6",
     "parameters": [
       {
+        "id": "auto",
+        "label": "Auto",
+        "description": "Set to 'true' to run unattended: skip user steps (work location picker)",
+        "required": false
+      },
+      {
         "id": "skip_review",
         "label": "Skip review",
         "description": "Set to 'true' to skip the code review + finalize steps (verify only)",
@@ -25,6 +31,7 @@
       "type": "user",
       "phase": "build",
       "transitions": [
+        { "when": { "type": "param", "key": "auto", "value": "true" }, "goto": "build" },
         {
           "when": { "type": "step_result", "result": "Work in current workspace" },
           "goto": "build"

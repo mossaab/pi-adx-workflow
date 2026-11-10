@@ -329,6 +329,21 @@ export class AdxExecutor {
       await this.block('no UI context for user step')
       return
     }
+    // Auto-skip: a matching param transition takes the step without user
+    // input (e.g. `auto=true` skips the "Where to work" picker in auto mode).
+    const autoState = await loadState(this.cwd ?? process.cwd())
+    const auto = step.transitions.find(
+      (t) => t.when.type === 'param' && this.matchesCondition(t.when, { result: '', output: {} }, autoState),
+    )
+    if (auto && auto.when.type === 'param') {
+      this.run.lastStepOutput = { content: `auto: ${auto.when.key}=${auto.when.value}` }
+      this.run.lastStepResult = 'auto'
+      this.run.updatedAt = new Date().toISOString()
+      await this.persist()
+      this.deps.notify(`adx: auto-skipping user step "${step.name}" (${auto.when.key}=${auto.when.value})`, 'info')
+      await this.enterStep(auto.goto)
+      return
+    }
     const choices = this.userStepChoices(step)
     this.run.status = 'waiting'
     await this.persist()

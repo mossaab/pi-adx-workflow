@@ -21,9 +21,10 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { createFlowMetaTool, createFlowStepDoneTool } from './tools.js'
+import { createFlowMetaTool, createFlowStepDoneTool, createFlowPlanDoneTool } from './tools.js'
 import {
   PLANNER_PROMPT_SECTION,
+  AUTO_PLANNER_PROMPT_SECTION,
   BUILDER_PROMPT_SECTION,
   activatePlanModeTools,
   getBuildModeTools,
@@ -47,8 +48,18 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     return
   }
   let planMode = false
+  let autoMode = false
   let toolsBeforePlanMode: string[] | undefined
   let ctx: ExtensionContext | undefined
+
+  // ------------------------------------------------------------------ flag
+  // `pi --adx-auto "goal: point 1, point 2, ..."` runs the whole pipeline
+  // unattended: plan (refine the provided points) → build → verify → recap.
+  pi.registerFlag('adx-auto', {
+    description: 'adx auto mode: plan → build → verify → recap without approvals (provide the acceptance points in the message)',
+    type: 'boolean',
+    default: false,
+  })
 
   // ------------------------------------------------------------------ executor
   const executor = new AdxExecutor({
@@ -77,12 +88,32 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // (a dismissed prompt = skip → proceed with best judgment).
   pi.registerTool(createAskUserTool())
 
+  // Planning-complete hand-off: in auto mode it exits plan mode and launches
+  // the full build-verify pipeline (no review); in manual mode it only
+  // reminds the user to run /adx-build.
+  pi.registerTool(
+    createFlowPlanDoneTool(async () => {
+      const c = ctx
+      if (!c) return
+      if (autoMode) {
+        exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+        c.ui.notify('adx: auto mode — planning complete, launching build-verify (no review)', 'info')
+        await executor.launch('build-verify', c, 'auto=true skip_review=true')
+      } else {
+        c.ui.notify('adx: planning complete — run /adx-build to start building', 'info')
+      }
+    }),
+  )
+
   // ------------------------------------------------------------------ mode helpers
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
     if (planMode) return
     planMode = true
     toolsBeforePlanMode = pi.getActiveTools()
-    pi.setActiveTools(activatePlanModeTools(pi.getActiveTools()))
+    let tools = activatePlanModeTools(pi.getActiveTools())
+    // Auto mode is unattended: no interactive question tool.
+    if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
+    pi.setActiveTools(tools)
     notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta.', 'info')
   }
 
@@ -162,6 +193,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     if (state.execution && state.execution.status !== 'done') {
       c.ui.notify(`adx: restoring workflow "${state.execution.workflowName}" (status: ${state.execution.status})`, 'info')
       await executor.restore(state, c)
+    } else if (pi.getFlag('adx-auto')) {
+      // Unattended pipeline: straight into plan mode (refine the provided
+      // points, then flow_plan_done hands off to build-verify automatically).
+      autoMode = true
+      enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
     }
   })
 
@@ -177,7 +213,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   pi.on('before_agent_start', (event) => {
     const sections = event.systemPromptOptions.sections
     if (planMode) {
-      sections['adx-plan'] = PLANNER_PROMPT_SECTION.trim()
+      sections['adx-plan'] = (autoMode ? AUTO_PLANNER_PROMPT_SECTION : PLANNER_PROMPT_SECTION).trim()
       delete sections['adx-build']
     } else if (executor.isActive()) {
       sections['adx-build'] = BUILDER_PROMPT_SECTION.trim()
