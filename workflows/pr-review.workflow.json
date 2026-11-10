@@ -1,0 +1,172 @@
+{
+  "metadata": {
+    "id": "pr-review",
+    "name": "PR Review",
+    "description": "PR review + fix + squash-merge workflow. Requires the `gh` CLI authenticated. Launch with: /adx-build pr-review pr_number=123",
+    "version": "1.0.0",
+    "color": "#10b981",
+    "parameters": [
+      {
+        "id": "pr_number",
+        "label": "PR Number",
+        "description": "The GitHub pull request number",
+        "position": 0,
+        "required": true
+      }
+    ]
+  },
+  "entryStep": "setup",
+  "settings": {
+    "maxIterations": 20
+  },
+  "steps": [
+    {
+      "id": "setup",
+      "name": "Setup Workspace",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Set up the review workspace for PR #{{pr_number}}:\n\n1. Create a git worktree: `git worktree add ../.adx-worktrees/review-pr-{{pr_number}}` (detached is fine; the branch is checked out next).\n2. From inside the worktree: fetch and checkout the PR head: `gh pr checkout {{pr_number}}`\n   If `gh pr checkout` fails because the PR head branch name collides with a local branch, fetch the PR head ref directly instead:\n   `git fetch origin refs/pull/{{pr_number}}/head && git checkout -b pr-{{pr_number}}-head FETCH_HEAD`\n\nIf any step fails, report the error and call flow_step_done(). Otherwise call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "check_base" }
+      ]
+    },
+    {
+      "id": "check_base",
+      "name": "Verify Base Branch",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Verify PR #{{pr_number}} targets the repository's default branch:\n\n1. Check the base branch: `PR_BASE=$(gh pr view {{pr_number}} --json baseRefName --jq '.baseRefName')` and the default branch: `gh repo view --json defaultBranch --jq '.defaultBranch'`.\n2. If the PR base differs from the default branch, retarget it: `gh pr edit {{pr_number}} --base <defaultBranch> && git fetch origin`.\n3. Rebase onto the latest default branch: `git rebase origin/<defaultBranch>`.\n\nIf rebase has conflicts, abort with `git rebase --abort` and report them. Otherwise call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "review_report" }
+      ]
+    },
+    {
+      "id": "review_report",
+      "name": "Review & Report",
+      "type": "agent",
+      "phase": "verification",
+      "agentId": "builder",
+      "prompt": "Review PR #{{pr_number}} and present findings:\n\n1. Read the diff: `git diff origin/<defaultBranch>...HEAD`\n2. List changed files: `git diff --stat origin/<defaultBranch>...HEAD`\n3. Run the project's checks: inspect package.json (or equivalent) and run the test / typecheck / lint commands that exist (e.g. `npm run test && npm run typecheck && npm run lint`)\n4. Inspect code quality, error handling, edge cases\n\nPresent a clear summary to the user:\n- What was reviewed\n- Key findings with specific line references\n- Whether any fixes are needed (be specific about what and why)\n- If no fixes needed, state that clearly\n\nCall flow_step_done() when done.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "approve_fixes" }
+      ]
+    },
+    {
+      "id": "approve_fixes",
+      "name": "Approve Fix Plan",
+      "type": "user",
+      "phase": "verification",
+      "transitions": [
+        {
+          "when": { "type": "step_result", "result": "apply" },
+          "goto": "apply_fixes"
+        },
+        {
+          "when": { "type": "step_result", "result": "skip" },
+          "goto": "user_test"
+        },
+        { "when": { "type": "always" }, "goto": "apply_fixes" }
+      ]
+    },
+    {
+      "id": "apply_fixes",
+      "name": "Apply Fixes",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Apply the fixes you identified during review:\n1. Implement the agreed fixes and improvements.\n2. Verify with the project's test / typecheck / lint commands.\n3. Leave everything UNCOMMITTED. Do NOT commit, tag, or push anything — the single review commit happens after manual testing.\n\nIf there is nothing to fix or apply, say so explicitly and call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "user_test" }
+      ]
+    },
+    {
+      "id": "user_test",
+      "name": "User Testing",
+      "type": "user",
+      "phase": "verification",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "capture_fixes" }
+      ]
+    },
+    {
+      "id": "capture_fixes",
+      "name": "Commit All Fixes & Adjustments",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "All fixes and testing adjustments are now in the review workspace. Capture them in ONE commit:\n\n1. `git add -A`\n2. If there are staged changes: `git commit -m \"review: fixes for PR #{{pr_number}}\"`\n   If nothing is staged, report that there is nothing to commit.\n3. Tag the tip so it can be located later: `git tag -f review-fixes-{{pr_number}}`\n4. Push the tag: `git push origin review-fixes-{{pr_number}}`\n5. Report whether fixes were captured (yes/no) and call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "prepare_merge" }
+      ]
+    },
+    {
+      "id": "prepare_merge",
+      "name": "Prepare PR for Merge",
+      "type": "agent",
+      "phase": "verification",
+      "agentId": "builder",
+      "prompt": "Make sure PR #{{pr_number}} is mergeable before attempting the squash-merge:\n\n1. Check mergeability and PR head details:\n   `gh pr view {{pr_number}} --json mergeable,mergeStateStatus,headRepositoryOwner,headRefName,maintainerCanModify`\n2. If `mergeable` is \"MERGEABLE\": report it and call flow_step_done() — the squash-merge step can proceed.\n3. If the PR is conflicting or otherwise not mergeable, rebuild the PR head on the latest default branch so it merges cleanly:\n   a. `git fetch origin && git fetch origin refs/pull/{{pr_number}}/head`\n   b. Create a fresh branch from the latest default branch: `git checkout -b pr-{{pr_number}}-merged origin/<defaultBranch>`\n   c. Bring in the PR content plus all local review fixes (the `review-fixes-{{pr_number}}` tag from the capture step): `git merge --squash review-fixes-{{pr_number}}`\n   d. Resolve every conflict — when both sides add features, keep BOTH; never delete the other side's code.\n   e. Verify with the project's test / typecheck / lint commands, then `git add -A && git commit -m \"PR #{{pr_number}}: merged onto <defaultBranch>\"`.\n   f. Push the resolved head to the PR's head ref (only possible when `maintainerCanModify` is true):\n      `git push --force-with-lease=<headRefName>:<expectedSha> https://github.com/<headOwner>/<headRepo>.git pr-{{pr_number}}-merged:<headRefName>`\n   g. Re-check mergeability with step 1.\n4. If the PR still is not mergeable, or pushing to the fork's head is not possible, report the blocker explicitly so the user can intervene, then call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "squash_merge" }
+      ]
+    },
+    {
+      "id": "squash_merge",
+      "name": "Squash-Merge PR",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Squash-merge PR #{{pr_number}} via API:\n\n1. `gh pr view {{pr_number}} --json title --jq '.title'` to get the title, then:\n   `gh api repos/<owner>/<repo>/pulls/{{pr_number}}/merge -X PUT -f merge_method=squash -f commit_title=\"PR #{{pr_number}}: <title>\"`\n   (Use `gh repo view --json owner,name --jq` to fill in owner/repo.)\n2. Call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "verify_merge" }
+      ]
+    },
+    {
+      "id": "verify_merge",
+      "name": "Confirm Merge on Default Branch",
+      "type": "agent",
+      "phase": "verification",
+      "agentId": "builder",
+      "prompt": "Switch back to the main checkout and confirm the merge landed on the default branch:\n\n1. `git worktree remove ../.adx-worktrees/review-pr-{{pr_number}} --force` (or `git worktree list` to find the exact path)\n2. `git checkout <defaultBranch> && git pull origin <defaultBranch> --ff-only`\n3. Confirm the squash-merge commit exists: `git log --oneline -3` (look for `PR #{{pr_number}}: ...`).\n4. The review fixes were folded into that single squash commit (one-commit design), so no separate cherry-pick is needed. If the squash commit is missing, report it loudly.\n5. Call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "verify_push" }
+      ]
+    },
+    {
+      "id": "verify_push",
+      "name": "Verify Fixes on Origin",
+      "type": "agent",
+      "phase": "verification",
+      "agentId": "builder",
+      "prompt": "Verify the PR's changes are present in git history on both local and origin default branch, before deleting the workspace:\n\n1. `git fetch origin` then confirm local and remote are in sync: `git rev-parse <defaultBranch> origin/<defaultBranch>` (SHAs must match)\n2. Confirm the PR's squash-merge commit (`PR #{{pr_number}}: ...`) is in history on both: `git log --oneline -5` and `git log --oneline -5 origin/<defaultBranch>`\n3. If review fixes were applied: they are folded into the single squash-merge commit (one-commit design) — there is no separate `review: fixes for PR #{{pr_number}}` commit on the default branch. State that and confirm the fix content is present by spot-checking one of the fixed files: `git show origin/<defaultBranch>:<file>`\n4. Spot-check the merged changes exist on origin: pick a file the PR touched and confirm with `git show origin/<defaultBranch>:<file>`\n\nReport whether the changes are confirmed on both local and origin, then call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "cleanup" }
+      ]
+    },
+    {
+      "id": "cleanup",
+      "name": "Clean Up",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Remove temporary artifacts:\n\n1. Remove remote tag if it exists: `git push origin --delete refs/tags/review-fixes-{{pr_number}} 2>/dev/null; true`\n2. Remove local tag if it exists: `git tag -d review-fixes-{{pr_number}} 2>/dev/null; true`\n3. Remove the worktree if it still exists: `git worktree remove ../.adx-worktrees/review-pr-{{pr_number}} --force 2>/dev/null; true`\n4. Call flow_step_done().",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "pr_feedback" }
+      ]
+    },
+    {
+      "id": "pr_feedback",
+      "name": "Leave Feedback on PR",
+      "type": "agent",
+      "phase": "verification",
+      "agentId": "builder",
+      "prompt": "Leave closing feedback on PR #{{pr_number}} once the user has approved it:\n\n1. Determine the next release version: read the current version from package.json (if present) and use the next patch bump (e.g. 2.0.112 -> v2.0.113). If you can't determine it confidently, ask the user.\n2. Draft the PR comment with EXACTLY this format (the `### AI-summary` heading is mandatory, no AI-written intro paragraph). The AI-summary bullets describe what WE, the maintainers, did on this PR during the review — rebase, conflict resolution, fixes applied, verification — NOT the PR's own feature content:\n\nMerged, will be released in vX.Y.Z\n---\n### AI-summary\n- <bullet point>\n- <bullet point>\n\n3. Present the full draft in chat and ask the user to approve or modify it.\n4. Do NOT post the comment until the user explicitly approves the final text.\n5. Once approved, post it: write the text to a temp file and run `gh pr comment {{pr_number}} --body-file <tempfile>`, then remove the temp file.\n\nCall flow_step_done() when you have presented the draft.",
+      "transitions": [{ "when": { "type": "always" }, "goto": "$done" }]
+    }
+  ],
+  "startCondition": {
+    "type": "always"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "pi-adx-workflow",
+  "version": "0.1.0",
+  "description": "plan → build/verify → review → summarize workflow for pi-coding-agent (extension + pi-subagents).",
+  "type": "module",
+  "private": true,
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  }
+}
