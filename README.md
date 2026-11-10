@@ -54,13 +54,14 @@ No build step: pi loads `src/index.ts` through jiti. Dependencies
 ## Usage
 
 ```
-/adx-plan              enter plan mode (read-only)
-/adx-build             switch to build mode + launch the build-verify workflow
-/adx-build pr-review pr_number=123   launch a parameterized workflow
-/adx-status            show current workflow state
-/adx-resume            resume a blocked/waiting workflow
-/adx-cancel            cancel the current run
-Ctrl+Alt+P             toggle plan mode
+/adx-plan                    enter plan mode (read-only)
+/adx-build                   switch to build mode + launch the simple build workflow (no verify/review)
+/adx-build-verify            switch to build mode + launch the full build-verify workflow
+/adx-build-verify skip_review=true   full workflow minus the code review step
+/adx-status                  show current workflow state
+/adx-resume                  resume a blocked/waiting workflow
+/adx-cancel                  cancel the current run
+Ctrl+Alt+A                   toggle plan mode
 ```
 
 Typical session:
@@ -69,8 +70,8 @@ Typical session:
 2. Ask for a feature: *"Add a dark mode toggle. Use flow_meta to define the
    acceptance criteria."* — the planner explores (read-only) and adds
    criteria. Review them in the widget (or edit with `flow_meta`).
-3. `/adx-build` — watch the pipeline run:
-   `work_location → build → verify → code_review → finalize → summarize`.
+3. `/adx-build` (quick: `build → summarize`) or `/adx-build-verify`
+   (full: `work_location → build → verify → code_review → finalize → summarize`).
    The widget tracks step, iteration, and criterion status; the footer shows
    a compact status line.
 4. When a criterion fails verification, the builder is nudged with the

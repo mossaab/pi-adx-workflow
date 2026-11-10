@@ -1,0 +1,76 @@
+{
+  "metadata": {
+    "id": "build",
+    "name": "Build (simple)",
+    "description": "Simple build: implement criteria and summarize. No automated verification, no code review. Use /adx-build-verify for the full pipeline.",
+    "version": "1.0.0",
+    "color": "#22c55e"
+  },
+  "entryStep": "work_location",
+  "settings": {
+    "maxIterations": 50
+  },
+  "steps": [
+    {
+      "id": "work_location",
+      "name": "Where to work",
+      "type": "user",
+      "phase": "build",
+      "transitions": [
+        {
+          "when": { "type": "step_result", "result": "Work in current workspace" },
+          "goto": "build"
+        },
+        {
+          "when": { "type": "step_result", "result": "Start a new workspace" },
+          "goto": "setup_workspace"
+        },
+        { "when": { "type": "always" }, "goto": "build" }
+      ]
+    },
+    {
+      "id": "setup_workspace",
+      "name": "Setting up workspace",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Set up a fresh workspace for this task. This step is ONLY about workspace setup — do not start implementing the task or modifying files here.\n\n1. Create a git worktree for a fresh workspace: `git worktree add ../.adx-worktrees/<slug> -b adx/<slug> HEAD` where <slug> is a short, descriptive lowercase slug you pick from the task (hyphen-separated, e.g. `dark-theme`). If the name might collide, append a short unique suffix.\n2. Do NOT ask the user for the name — decide based on the task and just do it.\n3. Do NOT begin implementing or testing anything here — the next step (\"Implement\") owns all coding.\n4. Confirm the worktree was created, then call flow_step_done.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "build" }
+      ]
+    },
+    {
+      "id": "build",
+      "name": "Implement",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Implement the task and make sure you fulfil the {{criteriaCount}} criteria. Mark each criterion as complete using flow_meta (key \"criteria\", action \"update\", status \"completed\").\n\nBefore marking, check the current statuses with flow_meta (action \"get\", key \"criteria\") and update the existing criteria by id — do NOT re-add criteria that already exist: duplicates keep the completion check from ever passing.\n\nNote: this simple build workflow runs **no automated verification and no code review** — so verify your own work before marking criteria complete: run the relevant tests and/or exercise the change. Do NOT spawn, resume, steer or manage subagents with the `subagent` tool.",
+      "nudgePrompt": "Continue working on the acceptance criteria. {{reason}}.\n\nFix the remaining issues, then mark each unmet criterion as **completed** using flow_meta (key \"criteria\", action \"update\", status \"completed\"). Do not use \"passed\" — that status is set by the verifier, not by you. Do not touch criteria already marked **passed** — never downgrade a passed criterion.",
+      "transitions": [
+        {
+          "when": {
+            "type": "metadata_all_in",
+            "key": "criteria",
+            "field": "status",
+            "values": ["completed", "passed"]
+          },
+          "goto": "summarize"
+        },
+        { "when": { "type": "always" }, "goto": "build" }
+      ]
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Produce a concise summary of what was accomplished in this session. Include:\n- What was implemented or fixed\n- Key files modified\n- Any notable decisions or tradeoffs\n- **What to test** — a short, actionable mini-tutorial from the user's perspective:\n  - Concrete UI flows or interactions to try, with the expected outcome\n  - Edge cases worth poking at\n  - One action per line, numbered, so the user can follow along without extra context\n\nCall flow_step_done when done.",
+      "transitions": [{ "when": { "type": "always" }, "goto": "$done" }]
+    }
+  ],
+  "startCondition": {
+    "type": "always"
+  }
+}

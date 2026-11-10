@@ -7,13 +7,14 @@
  * subagent.ts); no pi-subagents dependency.
  *
  * Commands:
- *   /adx-plan    enter plan mode (read-only; planner proposes criteria)
- *   /adx-build   switch to build mode + launch the build-verify workflow
- *   /adx-status  show current workflow state
- *   /adx-resume  resume a blocked/waiting workflow
- *   /adx-cancel  cancel the current workflow run
+ *   /adx-plan          enter plan mode (read-only; planner proposes criteria)
+ *   /adx-build         switch to build mode + launch the simple build workflow
+ *   /adx-build-verify  switch to build mode + launch the full build-verify workflow
+ *   /adx-status        show current workflow state
+ *   /adx-resume        resume a blocked/waiting workflow
+ *   /adx-cancel        cancel the current workflow run
  * Shortcut:
- *   Ctrl+Alt+P   toggle plan mode
+ *   Ctrl+Alt+A   toggle plan mode
  */
 
 import type {
@@ -103,7 +104,15 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   })
 
   pi.registerCommand('adx-build', {
-    description: 'Switch to build mode and launch the build-verify workflow',
+    description: 'Switch to build mode and launch the simple build workflow (no verify/review)',
+    handler: async (args, c) => {
+      ctx = c
+      exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      await executor.launch('build', c, args)
+    },
+  })
+  pi.registerCommand('adx-build-verify', {
+    description: 'Switch to build mode and launch the full build-verify workflow (verify + code review; add skip_review=true to skip the review)',
     handler: async (args, c) => {
       ctx = c
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))

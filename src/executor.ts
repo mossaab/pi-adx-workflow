@@ -624,6 +624,8 @@ export class AdxExecutor {
       case 'metadata_all_match':
       case 'metadata_all_in':
         return metaConditionMet(state, condition)
+      case 'param':
+        return this.run?.params?.[condition.key] === condition.value
       case 'always':
         return true
     }
