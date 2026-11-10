@@ -63,11 +63,14 @@ const DESTRUCTIVE_PATTERNS = [
   /\bpip\s+(install|uninstall)/i,
   /\bapt(-get)?\s+(install|remove|purge|update|upgrade)/i,
   /\bbrew\s+(install|uninstall|upgrade)/i,
-  /\bgit\s+(add|commit|push|pull|merge|rebase|reset|checkout|branch\s+-[dD]|stash|cherry-pick|revert|tag|init|clone)/i,
+  /\bgit\s+(add|commit|push|pull|merge|rebase|reset|checkout|branch\s+-[dD]|stash\s+(push|pop|drop|apply|clear)|cherry-pick|revert|tag\s+\S+|init|clone)/i,
   /\bsudo\b/i,
   /\bsu\b/i,
-  /\bkill\b/i,
-  /\bpkill\b/i,
+  // kill/pkill are destructive except the exact diagnostic forms allowed by
+  // SAFE_PATTERNS (`kill <pid>`, `pkill -f <pattern>`) — used to stop a
+  // dev server the planner started for a screenshot.
+  /^\s*kill\s+(?!\d)/,
+  /^\s*pkill\s+(?!-f\s+(".*"|\S+)\s*$)/,
   /\bkillall\b/i,
   /\breboot\b/i,
   /\bshutdown\b/i,
@@ -116,6 +119,36 @@ const SAFE_PATTERNS = [
   /^\s*git\s+ls-/i,
   /^\s*npm\s+(list|ls|view|info|search|outdated|audit)/i,
   /^\s*yarn\s+(list|info|why|audit)/i,
+  // Tooling version probes
+  /^\s*npm\s+--version/i,
+  /^\s*npm\s+config\s+(list|get)\b/i,
+  /^\s*pnpm\s+--version/i,
+  /^\s*yarn\s+--version/i,
+  /^\s*go\s+version/i,
+  /^\s*java\s+-version/i,
+  /^\s*rustc\s+--version/i,
+  /^\s*cargo\s+--version/i,
+  /^\s*docker\s+--version/i,
+  /^\s*make\s+--version/i,
+  // Quick interpreter probes (arbitrary -c/-e code is a known hole, accepted
+  // for read-only environment checks like `python3 -c "import PIL; ..."`)
+  /^\s*python3?\s+-c\s+/i,
+  /^\s*node\s+-e\s+/i,
+  // Process / port / container diagnostics
+  /^\s*lsof\s+/i,
+  /^\s*netstat\s+/i,
+  /^\s*ss\s+/i,
+  /^\s*pgrep\s+/i,
+  /^\s*docker\s+(ps|images|inspect|logs)\b/i,
+  // git read-only extras
+  /^\s*git\s+(stash\s+list|tag|blame|reflog|shortlog|ls-files|worktree\s+list|describe)\b/i,
+  // Project & web diagnostics
+  /^\s*npx\s+tsc\s+--noEmit\b/i,
+  /^\s*npx\s+playwright\s+(screenshot|open|show-trace)\b/i,
+  /^\s*npm\s+run\s+(dev|start|preview)\b/i,
+  // Stopping a diagnostic server started above (exact forms only)
+  /^\s*kill\s+-?\d+\s*$/,
+  /^\s*pkill\s+-f\s+(".*"|\S+)/,
   /^\s*node\s+--version/i,
   /^\s*python3?\s+--version/i,
   /^\s*curl\s/i,
@@ -159,7 +192,8 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 
 - Understand the user's goal before locking in details.
 - Explore the codebase with read-only actions when needed.
-- If a bash command is rejected by the plan-mode allowlist, it is NOT fatal: retry with a simpler read-only variant (plain ls without flags, no && chains, pipes, or redirects — e.g. avoid 2>&1 and 2>/dev/null) or proceed with what you already know. Never stop your turn because of a blocked command.
+- Web & system diagnostics: you may start a dev server (npm run dev in the background), take a headless screenshot (npx playwright screenshot <url> /tmp/shot.png), probe ports (lsof -i :PORT), then stop only the processes you started (kill <pid> / pkill -f <pattern>). Keep all artifacts in /tmp — plan mode must not modify the project.
+- If a bash command is rejected by the plan-mode allowlist, it is NOT fatal: retry with a simpler read-only variant (plain ls without flags, no && chains, pipes, or file redirects) or proceed with what you already know. Never stop your turn because of a blocked command.
 - Add each acceptance criterion with flow_meta (action "add", key "criteria"): a self-contained, verifiable description of what needs to be done AND how to verify it.
 - Present the criteria plainly and stop there.
 - Never ask "Do you approve these criteria and shall I switch to build?" — mode changes are driven externally by the user (/adx-build), not by your question.
