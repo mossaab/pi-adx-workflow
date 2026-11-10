@@ -136,7 +136,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
   })
 
-  pi.registerShortcut('ctrl+alt+p', {
+  pi.registerShortcut('ctrl+alt+a', {
     description: 'Toggle adx plan mode',
     handler: async (c) => {
       ctx = c
