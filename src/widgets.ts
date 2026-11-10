@@ -19,6 +19,9 @@ import type { FlowState } from './store.js'
 const WIDGET_KEY = 'adx-flow'
 const STATUS_KEY = 'adx-flow'
 
+/** Current mode badge shown in the footer (set by the extension on mode changes). */
+let modeBadge: string | undefined
+
 /** Spinner frames for the sub-agent activity widget. */
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 /** How often the activity widget re-reads the shared store for live criteria
@@ -72,7 +75,7 @@ export function refreshFlowWidget(ctx: ExtensionContext): void {
 
   if (!state || (!state.execution && Object.keys(state.metadata).length === 0)) {
     ui.setWidget(WIDGET_KEY, undefined)
-    ui.setStatus(STATUS_KEY, undefined)
+    ui.setStatus(STATUS_KEY, modeBadge)
     return
   }
 
@@ -133,13 +136,31 @@ export function refreshFlowWidget(ctx: ExtensionContext): void {
         ? `✅ adx: ${state.execution.workflowName} done`
         : `adx: ${state.execution.workflowName} · ${state.execution.currentStep} · ${passed}/${criteria.length || 0} criteria`
     ui.setStatus(STATUS_KEY, footer)
+  } else if (modeBadge) {
+    ui.setStatus(STATUS_KEY, modeBadge)
   } else {
     ui.setStatus(STATUS_KEY, undefined)
   }
 }
 
+/**
+ * Set (or clear) the footer mode badge, e.g. `adx: [PLAN] read-only`.
+ * The badge survives widget refreshes while no workflow is running; an
+ * active workflow's status line takes precedence over it.
+ */
+export function setModeBadge(ctx: ExtensionContext, badge: string | undefined): void {
+  modeBadge = badge
+  const state = readState(ctx.cwd)
+  if (badge === undefined) {
+    if (!state?.execution) ctx.ui.setStatus(STATUS_KEY, undefined)
+    return
+  }
+  if (!state?.execution) ctx.ui.setStatus(STATUS_KEY, badge)
+}
+
 /** Clear the widget + status (e.g. on /adx-cancel). */
 export function clearFlowWidget(ctx: ExtensionContext): void {
+  modeBadge = undefined
   ctx.ui.setWidget(WIDGET_KEY, undefined)
   ctx.ui.setStatus(STATUS_KEY, undefined)
 }

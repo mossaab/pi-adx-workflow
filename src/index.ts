@@ -32,7 +32,7 @@ import {
   planModeBashGuard,
 } from './modes.js'
 import { loadState } from './store.js'
-import { refreshFlowWidget, clearFlowWidget } from './widgets.js'
+import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
 import {
@@ -162,6 +162,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   )
 
   // ------------------------------------------------------------------ mode helpers
+  function showBadge(badge: string | undefined): void {
+    if (config.showWidget === false) badge = undefined
+    if (ctx) setModeBadge(ctx, badge)
+  }
+
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
     if (planMode) return
     planMode = true
@@ -170,6 +175,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     // Auto mode is unattended: no interactive question tool.
     if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
     pi.setActiveTools(tools)
+    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-build to start')
     notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta.', 'info')
   }
 
@@ -178,6 +184,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     planMode = false
     pi.setActiveTools(getBuildModeTools(toolsBeforePlanMode ?? pi.getActiveTools()))
     toolsBeforePlanMode = undefined
+    showBadge(undefined)
     notify('adx: plan mode OFF (build mode).', 'info')
   }
 
