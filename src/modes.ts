@@ -53,9 +53,10 @@ const DESTRUCTIVE_PATTERNS = [
   /\btruncate\b/i,
   /\bdd\b/i,
   /\bshred\b/i,
-  // Output redirects — but `2>&1` (stderr to stdout) is not destructive:
-  // a `>` followed by `&` is allowed, real file redirects ("> file", "2> /dev/null") are not.
-  /(^|[^<])>(?!&)/,
+  // Output redirects — but two idioms are not destructive:
+  // `2>&1` (stderr to stdout) and `> /dev/null` (suppress output). Real file
+  // redirects ("> file") stay blocked.
+  /(^|[^<])>(?!&|\s*\/dev\/null)/,
   />>/,
   /\bnpm\s+(install|uninstall|update|ci|link|publish)/i,
   /\byarn\s+(add|remove|install|publish)/i,
