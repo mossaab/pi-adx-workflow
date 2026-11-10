@@ -20,6 +20,8 @@ import {
   saveState,
 } from './store.js'
 import type { FlowState } from './store.js'
+/** Cap for the display-only "progress" feed (widget shows only the latest). */
+const PROGRESS_CAP = 20
 
 // ============================================================================
 // flow_meta
@@ -32,7 +34,8 @@ export function createFlowMetaTool(onChange?: () => void) {
     description:
       'Manage structured workflow data (acceptance criteria, todos, review findings). ' +
       'Each key holds items with id (auto), description, and status. ' +
-      'Known keys: criteria, todos, review_findings. Use action=schema to see the expected shape for a key.',
+      'Known keys: criteria, todos, review_findings, progress (display-only live feed). ' +
+      'Use action=schema to see the expected shape for a key.',
     promptSnippet:
       'Manage workflow acceptance criteria, todos, and review findings (structured session data)',
     promptGuidelines: [
@@ -112,6 +115,12 @@ export function createFlowMetaTool(onChange?: () => void) {
           if (!args.key) return fail('Missing required field: key')
           if (!args.description) return fail('Missing required field: description')
           const entry = metaAdd(state, args.key, args.description, args.status)
+          // Cap the display-only progress feed so it cannot grow unbounded
+          // across long runs (the widget only ever shows the latest entry).
+          if (args.key === 'progress') {
+            const all = state.metadata['progress']!
+            if (all.length > PROGRESS_CAP) state.metadata['progress'] = all.slice(-PROGRESS_CAP)
+          }
           await saveState(ctx.cwd, state)
           onChange?.()
           return ok(

@@ -63,6 +63,16 @@ export const META_SCHEMAS: Record<
     },
     statuses: ['pending'],
   },
+  progress: {
+    description:
+      'Display-only live progress feed written by sub-agents (verifier / code reviewer). The TUI activity widget shows the latest entry while the child runs. Never drives transitions; capped (oldest entries are pruned on add).',
+    fields: {
+      id: 'string (auto-generated)',
+      description: 'string — one short line of what the sub-agent is doing',
+      status: 'pending (default, unused)',
+    },
+    statuses: ['pending'],
+  },
 }
 
 // ============================================================================

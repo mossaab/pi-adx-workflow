@@ -380,9 +380,19 @@ export class AdxExecutor {
       `\n\nWrite your final report (what you did, results, findings) to this file: ${reportFile}`
 
     this.deps.notify(`adx: running sub-agent "${step.subAgentType}" (isolated context)…`, 'info')
+    // Fresh run → reset the display-only progress feed so stale notes from a
+    // previous run of this step don't mislead the live widget.
+    {
+      const state = await loadState(this.cwd)
+      if (state.metadata['progress']) {
+        delete state.metadata['progress']
+        await saveState(this.cwd, state)
+      }
+    }
     // Animated activity widget: spinner + agent/step + live elapsed time +
-    // task summary, so the idle TUI shows the child is working (minutes-long
-    // sub-agent runs). Restored by refreshFlowWidget() below.
+    // task summary + live criteria checklist + progress line, so the idle TUI
+    // shows the child is working (minutes-long sub-agent runs). Restored by
+    // refreshFlowWidget() below.
     const activityCtx = this.lastCtx
     if (activityCtx) {
       setSubAgentActivity(activityCtx, {

@@ -80,6 +80,12 @@ function applyVerifierEffect() {
       if (c.status === 'failed' && c.description !== 'Unsat') c.description += ' (missing edge case X)'
     }
   }
+  // The real verifier logs display-only progress notes as it works.
+  verifierWroteProgress = true
+  state.metadata['progress'] = [
+    { id: '1', description: `Verifying 1: … (pass ${verifyCount})`, status: 'pending' },
+    { id: '2', description: '1 passed: ok', status: 'pending' },
+  ]
   writeFileSync(statePath, JSON.stringify(state, null, 2))
   mkdirSync(join(stateDir, 'reports'), { recursive: true })
   writeFileSync(
@@ -94,9 +100,14 @@ function applyVerifierEffect() {
 // verify spawn fails ("child stopped") so the executor's never-stop resume
 // path is exercised; everything else succeeds and applies its store effects.
 const spawnCalls = []
+let progressResetBeforeReview = false
+let verifierWroteProgress = false
 
 function applyReviewerEffect() {
   const state = readState()
+  // The executor must have reset the progress feed for the fresh run, so no
+  // stale verifier notes leak into the code_review activity widget.
+  progressResetBeforeReview = state.metadata['progress'] === undefined
   state.metadata['review_findings'] = [
     {
       id: '1',
@@ -222,6 +233,19 @@ await executor.onStepDone({})
 
 // Summarize agent step injected
 check('summarize prompt injected', userMessages.some((m) => m.includes('What to test')))
+// Live progress feed: the verifier logged notes, and the executor reset the
+// feed before the code_review sub-agent step (no stale notes in the widget).
+check('verifier wrote display-only progress notes', verifierWroteProgress)
+check('progress feed reset before code_review step', progressResetBeforeReview)
+// Cap: the display-only progress feed prunes oldest entries beyond 20.
+{
+  for (let i = 0; i < 25; i++) await fm({ action: 'add', key: 'progress', description: `cap-test ${i}` })
+  const prog = readState().metadata['progress'] ?? []
+  check(
+    'progress feed capped at 20 (oldest pruned)',
+    prog.length === 20 && prog[0].description === 'cap-test 5',
+  )
+}
 
 // LLM finishes the summary
 await executor.onStepDone({})

@@ -21,6 +21,11 @@ const STATUS_KEY = 'adx-flow'
 
 /** Spinner frames for the sub-agent activity widget. */
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+/** How often the activity widget re-reads the shared store for live criteria
+ *  statuses + the display-only "progress" feed (child writes it via flow_meta). */
+const STATE_REFRESH_MS = 2_000
+/** Collapse the per-criterion list into a single summary line past this count. */
+const MAX_CRITERIA_LINES = 8
 const SPINNER_INTERVAL_MS = 120
 
 function formatElapsed(ms: number): string {
@@ -165,6 +170,12 @@ export interface SubAgentActivity {
  * Show the animated sub-agent activity widget (replaces the static
  * criteria/step widget on the same key). Call `refreshFlowWidget` (or
  * `clearFlowWidget`) when the child finishes to restore the static widget.
+ *
+ * While the child runs, the widget stays live:
+ * - criteria checklist updates as the child flips statuses via flow_meta
+ *   (✅ passed / ❌ failed / ⏳ completed-pending-verification);
+ * - a "what is it doing now" line shows the latest display-only progress
+ *   note the child logged under the "progress" metadata key.
  */
 export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentActivity): void {
   const ui = ctx.ui
@@ -177,6 +188,8 @@ export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentAct
     const t = theme ?? PLAIN_THEME
     let frame = 0
     let disposed = false
+    let liveState: FlowState | undefined
+    let lastStateReadAt = 0
     const timer = setInterval(() => {
       frame = (frame + 1) % SPINNER_FRAMES.length
       tui.requestRender()
@@ -184,6 +197,14 @@ export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentAct
 
     return {
       render(): string[] {
+        const now = Date.now()
+        // Throttled re-read of the shared store: the child updates criteria
+        // statuses (and the display-only "progress" feed) via flow_meta while
+        // it works, so the widget stays live without re-reading every frame.
+        if (now - lastStateReadAt >= STATE_REFRESH_MS) {
+          lastStateReadAt = now
+          liveState = readState(ctx.cwd)
+        }
         const spin = t.fg('accent', SPINNER_FRAMES[frame] ?? '●')
         const head =
           spin +
@@ -192,9 +213,38 @@ export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentAct
           ' — ' +
           t.fg('muted', `"${activity.step}"`) +
           ' · ' +
-          t.fg('muted', formatElapsed(Date.now() - activity.startedAt))
-        if (!taskOneLine) return [head]
-        return [head, '  ' + t.fg('muted', taskOneLine)]
+          t.fg('muted', formatElapsed(now - activity.startedAt))
+        const lines: string[] = [head]
+        if (taskOneLine) lines.push('  ' + t.fg('muted', taskOneLine))
+        // "What is it doing now" — latest display-only progress note.
+        const progress = liveState?.metadata['progress']
+        if (progress && progress.length > 0) {
+          const latest = progress[progress.length - 1]
+          if (latest)
+            lines.push('  ' + t.fg('warning', `▸ ${truncate(latest.description, 100)}`))
+        }
+        // Live criteria checklist (icons flip as the child verifies).
+        const criteria = liveState?.metadata['criteria'] ?? []
+        if (criteria.length > 0) {
+          const passed = criteria.filter((c) => c.status === 'passed').length
+          const failed = criteria.filter((c) => c.status === 'failed').length
+          if (criteria.length <= MAX_CRITERIA_LINES) {
+            for (const c of criteria) {
+              const icon = STATUS_ICON[c.status] ?? '☐'
+              const body = truncate(c.description, 52)
+              lines.push(`  ${icon} ${t.fg('muted', `${c.id} ${body}`)}`)
+            }
+          }
+          lines.push(
+            '  ' +
+              t.fg(
+                passed === criteria.length ? 'success' : 'muted',
+                `criteria: ${passed}/${criteria.length} passed` +
+                  (failed > 0 ? ` · ${failed} failed` : ''),
+              ),
+          )
+        }
+        return lines
       },
       // No cached render state (theme is applied per render); nothing to reset.
       invalidate(): void {},

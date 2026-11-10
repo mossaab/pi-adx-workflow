@@ -49,6 +49,11 @@ For each criterion marked [NEEDS VERIFICATION]:
 3. If the criterion is conceptual or doesn't require code (e.g., test/placeholder criteria), verify based on the description alone
 4. Run tests or commands only if applicable to the criterion
 Then call the flow_meta tool (action "update", key "criteria", with the criterion id) to set status to "passed" if the criterion is satisfied, or "failed" if it is NOT satisfied (explain why clearly in the description or a sibling note).
+## LIVE PROGRESS (display-only)
+So the user's UI can show you working, log short notes with flow_meta (action "add", key "progress"):
+- When you START verifying a criterion: "Verifying <id>: <short name>…"
+- When you FINISH one: "<id> passed: <one-line why>" or "<id> failed: <one-line why>"
+Keep each note to a single short line. The "progress" key is display-only: it never affects workflow transitions and does not need cleanup.
 ## IMPORTANT
 - Start by analyzing what each criterion actually requires
 - For trivial or non-code criteria, pass them immediately without exploring the codebase
@@ -70,6 +75,9 @@ Use the flow_meta tool to track your findings under key "review_findings":
 - **First review**: Create findings with action "add", key "review_findings". Set status to "open" and include a clear, actionable description of the issue (the builder must know exactly what to fix).
 - **Re-review** (findings already exist): Check existing "review_findings" with action "get". If a finding has been addressed, update its status to "resolved". If it is no longer relevant, update to "dismissed". Create new findings for any new issues.
 Each finding should have a clear, actionable description.
+## LIVE PROGRESS (display-only)
+Log short notes with flow_meta (action "add", key "progress") so the user's UI shows you working: one note when you start ("Reviewing diff…"), one per finding you create or update ("Finding <short summary>"), and one when you finish ("Review complete: N findings").
+Keep each note to a single short line. The "progress" key is display-only: it never affects workflow transitions and does not need cleanup.
 Do NOT edit source files. You may run read-only commands (git diff, tests, lints).
 **Never leave the review half-finished.** If you must stop (for example context pressure), record in the report file which findings were created/updated and which checks remain — the parent may resume you to finish.
 When done, write a short report (findings created/updated, overall assessment) to the report file named in your task, and stop.`
