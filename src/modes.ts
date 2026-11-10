@@ -123,6 +123,7 @@ const SAFE_PATTERNS = [
   /^\s*npm\s+--version/i,
   /^\s*npm\s+config\s+(list|get)\b/i,
   /^\s*pnpm\s+--version/i,
+  /^\s*pip3?\s+(list|show|config)\b/i,
   /^\s*yarn\s+--version/i,
   /^\s*go\s+version/i,
   /^\s*java\s+-version/i,
@@ -133,6 +134,7 @@ const SAFE_PATTERNS = [
   // Quick interpreter probes (arbitrary -c/-e code is a known hole, accepted
   // for read-only environment checks like `python3 -c "import PIL; ..."`)
   /^\s*python3?\s+-c\s+/i,
+  /^\s*python3?\s+-(\s|$)/, // stdin script: python3 - <<'EOF' ... EOF
   /^\s*node\s+-e\s+/i,
   // Process / port / container diagnostics
   /^\s*lsof\s+/i,
