@@ -68,7 +68,7 @@ Tools registered: `flow_meta`, `flow_step_done`, `flow_plan_done`, `ask_user`.
 
 | Check | Verdict |
 |---|---|
-| `registerCommand` for `/adx-plan`, `/adx-build`, `/adx-build-verify`, `/adx-status`, `/adx-resume`, `/adx-cancel`, `/adx-config` with `description` + `handler(args, ctx)` | ✅ |
+| `registerCommand` for `/adx-plan`, `/adx-build-mode`, `/adx-build`, `/adx-build-verify`, `/adx-status`, `/adx-resume`, `/adx-cancel`, `/adx-config` with `description` + `handler(args, ctx)` | ✅ |
 | `registerShortcut('ctrl+alt+a', { description, handler })` | ✅ |
 | `registerFlag('adx-auto', { type: 'boolean', default: false })` read via `pi.getFlag()` in `session_start` (documented pattern — in the factory, `getFlag()` returns the default) | ✅ |
 | Command handlers capture `ctx` (ExtensionCommandContext) into the module-level `ctx` for tools/events | ✅ |

@@ -8,6 +8,7 @@
  *
  * Commands:
  *   /adx-plan          enter plan mode (read-only; planner proposes criteria)
+ *   /adx-build-mode    switch to build mode (turn plan mode off; no launch)
  *   /adx-build         switch to build mode + launch the simple build workflow
  *   /adx-build-verify  switch to build mode + launch the full build-verify workflow
  *   /adx-status        show current workflow state
@@ -158,8 +159,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
     pi.setActiveTools(tools)
     persistPlanMode(true)
-    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-build to start')
-    notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta.', 'info')
+    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-build-mode to exit · /adx-build to start')
+    notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta. Exit: /adx-build-mode or Ctrl+Alt+A.', 'info')
   }
 
   function exitPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
@@ -181,13 +182,30 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
   })
 
+  pi.registerCommand('adx-build-mode', {
+    description: 'Switch to build mode (turn plan mode off) without launching a workflow',
+    handler: async (_args, c) => {
+      ctx = c
+      if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      else c.ui.notify('adx: already in build mode (plan mode is off)', 'info')
+    },
+  })
+
   pi.registerCommand('adx-build', {
-    description: 'Switch to build mode and launch the simple build workflow (no verify/review)',
+    description:
+      'Switch to build mode and launch a workflow (default: the configured build one). Pass a workflow id as the first token, e.g. /adx-build pr-review pr_number=123',
     handler: async (args, c) => {
       ctx = c
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      const workflow = config.defaultBuildWorkflow === 'build-verify' ? 'build-verify' : 'build'
-      await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(args) : args)
+      // First bare token (no '=') names the workflow; the rest are key=value params.
+      const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
+      const first = tokens[0]
+      const hasWorkflowToken = first !== undefined && !first.includes('=')
+      const workflow = hasWorkflowToken
+        ? first
+        : config.defaultBuildWorkflow === 'build-verify' ? 'build-verify' : 'build'
+      const params = hasWorkflowToken ? tokens.slice(1).join(' ') : tokens.join(' ')
+      await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(params) : params)
     },
   })
   pi.registerCommand('adx-build-verify', {

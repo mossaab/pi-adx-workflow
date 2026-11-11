@@ -102,6 +102,7 @@ re-create the symlink.
 
 ```
 /adx-plan                    enter plan mode (read-only)
+/adx-build-mode              switch to build mode (turn plan mode off, no launch)
 /adx-build                   switch to build mode + launch the simple build workflow (no verify/review)
 /adx-build-verify            switch to build mode + launch the full build-verify workflow
 /adx-build-verify skip_review=true   full workflow minus the code review step
@@ -281,7 +282,7 @@ Three workflows are bundled:
 - `build-verify` — **the full pipeline** (default for `/adx-build-verify`):
   `work_location → build → verify → code_review → finalize → summarize`.
 - `pr-review` — PR review + fixes + squash-merge (requires `gh`), launched
-  with `pr_number`.
+  with `/adx-build pr-review pr_number=123`.
 
 ### Authoring reference (short)
 
