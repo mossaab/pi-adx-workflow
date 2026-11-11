@@ -79,6 +79,9 @@ export interface SubAgentStep extends StepBase {
   prompt?: string
   /** Injected when nudging the sub-agent. Supports template variables. */
   nudgePrompt?: string
+  /** Optional per-step model override (provider/model) for the child run —
+   * e.g. a faster/cheaper model for verify/review. Precedes ADX_FLOW_MODEL. */
+  model?: string
 }
 
 /** Run a shell command, branch on exit code */

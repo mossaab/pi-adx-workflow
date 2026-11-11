@@ -45,6 +45,8 @@ import {
   resolveTemplate,
   formatCriteriaList,
   getModifiedFiles,
+  projectHash,
+  projectStats,
   type TemplateContext,
 } from './templates.js'
 import { loadWorkflow, parseLaunchParams } from './workflows.js'
@@ -115,6 +117,8 @@ export class AdxExecutor {
   private resumeReentry = false
   /** Consecutive auto-continues on the current step (reset on each step entry). */
   private autoContinueCount = 0
+  /** Cached project size for {{projectLines}} / {{projectFileCount}} (refreshed on step entry). */
+  private projectStatsCache: { lines: number; files: number } | undefined
 
   constructor(deps: ExecutorDeps) {
     this.deps = deps
@@ -327,6 +331,8 @@ export class AdxExecutor {
     }
     await this.persist()
     this.deps.updateWidget?.()
+    // Refresh the size stats so verify prompts can keep the effort proportional.
+    this.projectStatsCache = projectStats(this.cwd)
 
     switch (step.type) {
       case 'user':
@@ -450,6 +456,41 @@ export class AdxExecutor {
         await saveState(this.cwd, state, this.sessionId)
       }
     }
+    // Re-verification short-circuit: if this verifier step already ran
+    // successfully, the project files are UNCHANGED since, and the step's
+    // metadata gate is NOW met (e.g. the store caught up after a lost write),
+    // skip the expensive re-run and advance with the previous report. Without
+    // this, a single small-file project can pay 3-4 full verifier passes just
+    // to re-converge on the same verdict.
+    if (isReentry && step.subAgentType === 'adx-verifier') {
+      const prev = this.run.lastSubAgentStep
+      if (prev && prev.ok && prev.stepId === step.id && prev.hash) {
+        const hash = projectHash(this.cwd)
+        if (hash === prev.hash) {
+          const stateNow = await loadState(this.cwd, this.sessionId)
+          const gateMet = step.transitions.some(
+            (t) =>
+              (t.when.type === 'metadata_all_match' || t.when.type === 'metadata_all_in') &&
+              metaConditionMet(stateNow, t.when),
+          )
+          if (gateMet) {
+            let content = ''
+            try {
+              content = await readFile(reportFile, 'utf8')
+            } catch {
+              /* no previous report */
+            }
+            this.deps.notify(
+              'adx: verifier re-run skipped — code unchanged since the last pass and the gate is met',
+              'info',
+            )
+            const outcome: StepOutcome = { result: 'success', output: { content } }
+            await this.advance(step, outcome)
+            return
+          }
+        }
+      }
+    }
     // Animated activity widget: spinner + agent/step + live elapsed time +
     // task summary + live criteria checklist + progress line, so the idle TUI
     // shows the child is working (minutes-long sub-agent runs). Restored by
@@ -467,7 +508,11 @@ export class AdxExecutor {
         this.sessionId,
       )
     }
-    let result = await this.spawn(step.subAgentType, task, this.childOpts())
+    const spawnOpts: Omit<import('./subagent.js').SpawnOptions, 'resume'> = {
+      ...this.childOpts(),
+      ...(step.model ? { model: step.model } : {}),
+    }
+    let result = await this.spawn(step.subAgentType, task, spawnOpts)
 
     // Transient busy: the child session was still streaming when the task
     // prompt was injected ("Agent is already processing"). It will go idle
@@ -481,7 +526,7 @@ export class AdxExecutor {
         'info',
       )
       await new Promise((r) => setTimeout(r, delayMs))
-      result = await this.spawn(step.subAgentType, task, this.childOpts())
+      result = await this.spawn(step.subAgentType, task, spawnOpts)
     }
 
     // Never-stop: if the child stopped/died (e.g. context pressure, timeout)
@@ -492,8 +537,20 @@ export class AdxExecutor {
         step.subAgentType,
         result.runId,
         'Continue from where you stopped. Finish the task, complete any flow_meta updates, and write the final report to the report file named in your original task. Do not repeat work already done.',
-        this.childOpts(),
+        spawnOpts,
       )
+    }
+
+    // Record the run for the re-verification short-circuit: the code hash at
+    // the moment of a successful verify lets a later re-entry skip the
+    // expensive re-run when nothing in the project has changed.
+    if (result.ok) {
+      this.run.lastSubAgentStep = {
+        stepId: step.id,
+        ok: true,
+        hash: projectHash(this.cwd),
+        at: new Date().toISOString(),
+      }
     }
 
     // The child may have updated the shared store (criteria / review_findings)
@@ -568,8 +625,11 @@ export class AdxExecutor {
     }
 
     const state = await loadState(this.cwd, this.sessionId)
-    for (const t of step.transitions) {
+    for (let i = 0; i < step.transitions.length; i++) {
+      const t = step.transitions[i]!
       if (this.matchesCondition(t.when, outcome, state)) {
+        this.run!.lastNudgeReason =
+          t.when.type === 'always' ? this.unmetGateReason(step, state) : undefined
         this.run.lastStepOutput = outcome.output
         this.run.lastStepResult = outcome.result
         this.run.updatedAt = new Date().toISOString()
@@ -656,8 +716,13 @@ export class AdxExecutor {
   private async advance(step: WorkflowStep, outcome: StepOutcome): Promise<void> {
     if (!this.run || !this.cwd) return
     const state = await loadState(this.cwd, this.sessionId)
-    for (const t of step.transitions) {
+    for (let i = 0; i < step.transitions.length; i++) {
+      const t = step.transitions[i]!
       if (this.matchesCondition(t.when, outcome, state)) {
+        // Falling through to the "always" fallback means every specific gate
+        // was unmet — remember WHY so the next nudge is actionable.
+        this.run!.lastNudgeReason =
+          t.when.type === 'always' ? this.unmetGateReason(step, state) : undefined
         this.run.lastStepOutput = outcome.output
         this.run.lastStepResult = outcome.result
         this.run.updatedAt = new Date().toISOString()
@@ -697,7 +762,32 @@ export class AdxExecutor {
     }
   }
 
+  /**
+   * Why the LAST gate fell through to an "always" fallback (persisted on the
+   * run, shown in the next nudge prompt). Replaces the opaque
+   * "transition condition not met" with an actionable reason like
+   * "10 criteria not yet passed".
+   */
+  private unmetGateReason(step: WorkflowStep, state: FlowState): string | undefined {
+    for (const t of step.transitions) {
+      const w = t.when
+      if (w.type !== 'metadata_all_match' && w.type !== 'metadata_all_in') continue
+      if (metaConditionMet(state, w)) continue // satisfied — not the blocker
+      const entries = state.metadata[w.key] ?? []
+      const unmet =
+        w.type === 'metadata_all_match'
+          ? entries.filter((e) => e[w.field] !== w.value).length
+          : entries.filter((e) => !w.values.includes(e[w.field] as string)).length
+      const accepted = w.type === 'metadata_all_match' ? w.value : w.values.join(' / ')
+      if (w.key === 'criteria') return `${unmet} criteria not yet ${accepted}`
+      if (w.key === 'review_findings') return `${unmet} review findings not yet ${accepted}`
+      return `${unmet} "${w.key}" items do not match the gate`
+    }
+    return undefined
+  }
+
   private reasonFor(step: WorkflowStep): string {
+    if (this.run?.lastNudgeReason) return this.run.lastNudgeReason
     const state = this._lastState
     if (!state) return 'condition not met'
     const transitions = step.transitions ?? []
@@ -786,6 +876,8 @@ export class AdxExecutor {
       pendingCount: state ? pendingCriteriaCount(state) : 0,
       criteriaList: formatCriteriaList(state?.metadata['criteria'] ?? []),
       modifiedFiles: getModifiedFiles(cwd),
+      projectLines: this.projectStatsCache?.lines ?? 0,
+      projectFileCount: this.projectStatsCache?.files ?? 0,
       stepOutput: run?.lastStepOutput ?? {},
       params: run?.params ?? {},
     }

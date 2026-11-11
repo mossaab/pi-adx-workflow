@@ -14,7 +14,8 @@
  * file, whose path is passed via the ADX_FLOW_STATE env var.
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 // ============================================================================
@@ -107,6 +108,11 @@ export interface ExecutionState {
   seenSteps?: string[]
   /** Set when the legacy shared state.json run was adopted into a per-session file. */
   migratedTo?: string
+  /** Most recent sub-agent step run — drives the verifier re-run short-circuit
+   * (code hash unchanged + gate met ⇒ skip the expensive re-run). */
+  lastSubAgentStep?: { stepId: string; ok: boolean; hash?: string; at: string }
+  /** Human-readable reason the last transition gate was unmet (shown in nudges). */
+  lastNudgeReason?: string
   updatedAt: string
 }
 
@@ -192,37 +198,93 @@ export async function loadState(cwd: string, sessionId?: string): Promise<FlowSt
 // concurrent reader can never observe a partially written file.
 let saveChain: Promise<unknown> = Promise.resolve()
 
+/**
+ * Cross-process lock around the state file. The parent pi process and each
+ * `pi -p` flow child (verifier / reviewer) have their own in-process
+ * saveChain, so the chain alone cannot stop a parent persist() from racing a
+ * child's flow_meta write (lost updates). A lock file (O_EXCL) serializes
+ * writers across processes; a lock left behind by a crashed holder is stolen
+ * after LOCK_STALE_MS.
+ */
+const LOCK_STALE_MS = 15_000
+const LOCK_TIMEOUT_MS = 10_000
+const LOCK_POLL_MS = 50
+
+async function withStateLock(
+  cwd: string,
+  sessionId: string | undefined,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const path = stateFileFor(cwd, sessionId)
+  await mkdir(dirname(path), { recursive: true })
+  const lockPath = `${path}.lock`
+  const deadline = Date.now() + LOCK_TIMEOUT_MS
+  for (;;) {
+    try {
+      const fh = await open(lockPath, fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY)
+      await fh.writeFile(String(process.pid))
+      try {
+        await fn()
+      } finally {
+        await fh.close()
+        await unlink(lockPath).catch(() => undefined)
+      }
+      return
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      // Steal a stale lock (crashed holder) instead of waiting for it.
+      const st = await stat(lockPath).catch(() => undefined)
+      if (st && Date.now() - st.mtimeMs > LOCK_STALE_MS) {
+        await unlink(lockPath).catch(() => undefined)
+        continue
+      }
+      if (Date.now() > deadline)
+        throw new Error(
+          `adx-flow: state lock "${lockPath}" not acquired within ${LOCK_TIMEOUT_MS}ms`,
+        )
+      await new Promise((r) => setTimeout(r, LOCK_POLL_MS))
+    }
+  }
+}
+
+async function writeAtomic(
+  cwd: string,
+  state: FlowState,
+  sessionId: string | undefined,
+): Promise<void> {
+  const path = stateFileFor(cwd, sessionId)
+  await mkdir(dirname(path), { recursive: true })
+  const tmp = `${path}.tmp`
+  await writeFile(tmp, JSON.stringify(state, null, 2), 'utf8')
+  await rename(tmp, path)
+}
+
 export function saveState(cwd: string, state: FlowState, sessionId?: string): Promise<void> {
-  const run = saveChain.then(async () => {
-    const path = stateFileFor(cwd, sessionId)
-    await mkdir(dirname(path), { recursive: true })
-    const tmp = `${path}.tmp`
-    await writeFile(tmp, JSON.stringify(state, null, 2), 'utf8')
-    await rename(tmp, path)
-  })
+  const run = saveChain.then(() =>
+    withStateLock(cwd, sessionId, () => writeAtomic(cwd, state, sessionId)),
+  )
   saveChain = run.catch(() => undefined)
   return run
 }
 
 /**
- * Atomic read-modify-write under the write chain: `mutate` sees the latest
- * persisted state and the result is written atomically — no lost updates
- * when a plan-mode toggle and an executor persist race.
+ * Atomic read-modify-write under the write chain AND the cross-process lock:
+ * `mutate` sees the latest persisted state and the result is written
+ * atomically — no lost updates when parallel tool calls interleave, or when
+ * a parent persist() races a flow child's flow_meta write.
  */
 export function mutateState(
   cwd: string,
   sessionId: string | undefined,
   mutate: (state: FlowState) => void | Promise<void>,
 ): Promise<void> {
-  const run = saveChain.then(async () => {
-    const state = normalizeState(await readRaw(stateFileFor(cwd, sessionId)))
-    await mutate(state)
-    const path = stateFileFor(cwd, sessionId)
-    await mkdir(dirname(path), { recursive: true })
-    const tmp = `${path}.tmp`
-    await writeFile(tmp, JSON.stringify(state, null, 2), 'utf8')
-    await rename(tmp, path)
-  })
+  const run = saveChain.then(() =>
+    withStateLock(cwd, sessionId, async () => {
+      const state = normalizeState(await readRaw(stateFileFor(cwd, sessionId)))
+      await mutate(state)
+      await writeAtomic(cwd, state, sessionId)
+    }),
+  )
   saveChain = run.catch(() => undefined)
   return run
 }

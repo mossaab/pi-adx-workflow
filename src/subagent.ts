@@ -48,8 +48,8 @@ For each criterion marked [NEEDS VERIFICATION]:
 1. Consider the task summary and criterion description
 2. If the criterion requires code changes, read the modified files and verify the implementation
 3. If the criterion is conceptual or doesn't require code (e.g., test/placeholder criteria), verify based on the description alone
-4. Run tests or commands only if applicable to the criterion
-Then call the flow_meta tool (action "update", key "criteria", with the criterion id) to set status to "passed" if the criterion is satisfied, or "failed" if it is NOT satisfied (explain why clearly in the description or a sibling note).
+4. Run tests or commands only if applicable to the criterion — keep the effort PROPORTIONAL to the project size (for a small project, a focused read plus one smoke run of the main flows is enough; do not build an exhaustive test suite)
+Then record the results with a SINGLE flow_meta call: action "update_batch", key "criteria", items: one {"id", "status"} object per verified criterion — "passed" if the criterion is satisfied, "failed" if it is NOT (explain why clearly in your report). The batch call is atomic; do NOT issue parallel single-item updates (they can lose writes).
 ## LIVE PROGRESS (display-only)
 So the user's UI can show you working, log short notes with flow_meta (action "add", key "progress"):
 - When you START verifying a criterion: "Verifying <id>: <short name>…"
@@ -123,6 +123,9 @@ export interface SpawnOptions {
   /** Parent's adx state file — the child's flow_meta updates must land in the
    * PARENT's per-session state, so it is passed through ADX_FLOW_STATE. */
   statePath?: string
+  /** Per-step model override (provider/model, e.g. a faster/cheaper model for
+   * verify/review). Takes precedence over the ADX_FLOW_MODEL env var. */
+  model?: string
 }
 
 // ============================================================================
@@ -200,10 +203,10 @@ export function spawnFlowAgent(
   if (opts.resume) args.push('--session', opts.resume.sessionId)
   else args.push('--session-id', runId)
   if (def?.systemPrompt) args.push('--append-system-prompt', def.systemPrompt)
-  // Model: default = the user's default model (same as the parent session).
-  // Set ADX_FLOW_MODEL (e.g. "litellm/qwen3.8-27b") to pin a (cheaper) model
-  // for flow children.
-  if (process.env.ADX_FLOW_MODEL) args.push('--model', process.env.ADX_FLOW_MODEL)
+  // Model: per-step override (SubAgentStep.model) > ADX_FLOW_MODEL env > the
+  // user's default model (same as the parent session).
+  const model = opts.model ?? process.env.ADX_FLOW_MODEL
+  if (model) args.push('--model', model)
   args.push(prompt)
 
   return new Promise((resolve) => {

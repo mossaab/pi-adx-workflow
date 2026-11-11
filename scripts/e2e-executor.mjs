@@ -67,6 +67,8 @@ function fakeCtx() {
 // The FIRST verify spawn fails (child "stopped") → the executor must resume it.
 let verifyCount = 0
 let firstVerifyFailed = false
+let skipTestMode = false
+let skipProbePass = 0
 
 function applyVerifierEffect() {
   verifyCount += 1
@@ -130,6 +132,17 @@ function applyReviewerEffect() {
 const fakeSpawn = async (agent, task, opts) => {
   spawnCalls.push(agent)
   spawnOpts.push(opts)
+  if (agent === 'adx-verifier' && skipTestMode) {
+    // Re-verification short-circuit scenario: the first pass fails the probe
+    // criterion; the (simulated) builder then fixes the store by hand, so a
+    // full re-spawn must NOT happen.
+    skipProbePass += 1
+    const st = readState()
+    const probe = (st.metadata['criteria'] ?? []).find((c) => c.description === 'SkipProbe')
+    if (probe) probe.status = skipProbePass === 1 ? 'failed' : 'passed'
+    writeFileSync(statePath, JSON.stringify(st, null, 2))
+    return { ok: true, runId: 'skip-run' }
+  }
   if (agent === 'adx-verifier' && !firstVerifyFailed) {
     // Child "stopped" before finishing (e.g. context pressure):
     // failure with a run id so the executor can resume it.
@@ -204,7 +217,7 @@ await fm({ action: 'update', key: 'criteria', id: '2', status: 'completed' })
 await executor.onStepDone({})
 check(
   'verifier failed a criterion → nudged back to build',
-  userMessages.some((m) => m.includes('not yet completed / passed') && m.includes('Verification pass 1')),
+  userMessages.some((m) => m.includes('1 criteria not yet passed') && m.includes('Verification pass 1')),
 )
 check(
   'stopped sub-agent was resumed (never-stop)',
@@ -220,7 +233,7 @@ check(
 )
 check(
   'verify→build re-entry (nudgePrompt) sent with deliverAs: followUp (busy-safe)',
-  userMessageOpts[userMessages.findIndex((m) => m.includes('not yet completed / passed'))]?.deliverAs === 'followUp',
+  userMessageOpts[userMessages.findIndex((m) => m.includes('1 criteria not yet passed'))]?.deliverAs === 'followUp',
 )
 
 // LLM fixes, marks completed again
@@ -375,6 +388,135 @@ check(
   'steered nudge keeps the run on the same step',
   readState().execution?.currentStep === 'work' && readState().execution?.status === 'running',
 )
+
+// ------------------------------------------------------------------ flow_meta atomicity (kanban regression)
+// Parallel single-item adds must not lose writes (the kanban session lost 10
+// of 11 planning adds to a last-write-wins race), and update_batch must
+// apply a whole multi-item update in one atomic write.
+{
+  const parallelAdds = await Promise.all(
+    Array.from({ length: 12 }, (_, i) =>
+      flowMeta.execute(
+        `par-${i}`,
+        { action: 'add', key: 'todos', description: `parallel item ${i}` },
+        undefined,
+        undefined,
+        { cwd: scratchRepo, sessionManager: { getSessionId: () => 'e2e-session' } },
+      ),
+    ),
+  )
+  check(
+    'parallel flow_meta adds keep every item (no lost updates)',
+    parallelAdds.every((r) => !r.isError) &&
+      (readState().metadata['todos'] ?? []).length === 12,
+  )
+  const batchRes = await fm({
+    action: 'update_batch',
+    key: 'todos',
+    items: [
+      { id: '1', status: 'completed' },
+      { id: '6', status: 'in_progress' },
+      { id: '12', status: 'completed' },
+    ],
+  })
+  const todos = readState().metadata['todos'] ?? []
+  check(
+    'update_batch updates all items in one atomic call',
+    batchRes.includes('3 items') &&
+      todos[0].status === 'completed' &&
+      todos[5].status === 'in_progress' &&
+      todos[11].status === 'completed',
+  )
+  const addBatchRes = await fm({
+    action: 'add_batch',
+    key: 'todos',
+    descriptions: ['batch one', 'batch two'],
+  })
+  check(
+    'add_batch adds all items in one atomic call',
+    addBatchRes.includes('2 items') &&
+      (readState().metadata['todos'] ?? []).length === 14,
+  )
+}
+
+// ------------------------------------------------------------------ verifier re-run short-circuit (kanban regression)
+// Unchanged code + gate now met ⇒ the expensive verifier pass is skipped
+// instead of re-running (kanban paid 4 full verifier passes for one small file).
+{
+  const verifSpawnsBefore = spawnCalls.filter((c) => c.startsWith('adx-verifier')).length
+  writeFileSync(
+    join(scratchRepo, '.pi', 'adx-workflows', 'skip-test.workflow.json'),
+    JSON.stringify(
+      {
+        metadata: { id: 'skip-test', name: 'Skip Test' },
+        entryStep: 'b',
+        steps: [
+          {
+            id: 'b',
+            name: 'Build',
+            type: 'agent',
+            prompt: 'Build it.',
+            nudgePrompt: 'Nudge: {{reason}}. Keep going.',
+            transitions: [{ when: { type: 'always' }, goto: 'v' }],
+          },
+          {
+            id: 'v',
+            name: 'Verify',
+            type: 'sub_agent',
+            subAgentType: 'adx-verifier',
+            prompt: 'Verify it.',
+            transitions: [
+              {
+                when: { type: 'metadata_all_match', key: 'criteria', field: 'status', value: 'passed' },
+                goto: '$done',
+              },
+              { when: { type: 'always' }, goto: 'b' },
+            ],
+          },
+        ],
+        startCondition: { type: 'always' },
+      },
+      null,
+      2,
+    ),
+  )
+  // Fresh criteria: one probe, completed (needs verification).
+  const stSkip = readState()
+  stSkip.metadata['criteria'] = [{ id: '1', description: 'SkipProbe', status: 'completed' }]
+  writeFileSync(statePath, JSON.stringify(stSkip, null, 2))
+  skipTestMode = true
+  await executor.launch('skip-test', ctx)
+  // Build done → first verify pass runs (probe fails → gate unmet → nudge back to build).
+  await executor.onStepDone({})
+  check(
+    'skip-test: first verify pass ran and fell through to build',
+    readState().execution?.currentStep === 'b' &&
+      (readState().metadata['criteria'] ?? [])[0]?.status === 'failed',
+  )
+  check(
+    'skip-test: nudge carries the actionable gate reason',
+    userMessages.at(-1)?.includes('1 criteria not yet passed'),
+  )
+  // Simulated builder "fixes" the store by hand (the kanban case: the store
+  // caught up after a lost write) — no project files changed.
+  const stFix = readState()
+  stFix.metadata['criteria'][0].status = 'passed'
+  writeFileSync(statePath, JSON.stringify(stFix, null, 2))
+  await executor.onStepDone({})
+  check(
+    'skip-test: verifier re-run skipped (code unchanged + gate met) → $done',
+    readState().execution?.status === 'done',
+  )
+  check(
+    'skip-test: exactly ONE verifier spawn for the whole scenario',
+    spawnCalls.filter((c) => c.startsWith('adx-verifier')).length === verifSpawnsBefore + 1,
+  )
+  check(
+    'skip-test: skip notification emitted',
+    notifications.some((n) => n.includes('verifier re-run skipped')),
+  )
+  skipTestMode = false
+}
 
 // ------------------------------------------------------------------ report
 console.log(`\nwidget refreshes: ${widgetRefreshes}`)

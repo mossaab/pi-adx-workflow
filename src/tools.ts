@@ -17,10 +17,10 @@ import {
   metaAdd,
   metaRemove,
   metaUpdate,
+  mutateState,
   normalizeId,
-  saveState,
 } from './store.js'
-import type { FlowState } from './store.js'
+import type { FlowState, MetaEntry } from './store.js'
 /** Cap for the display-only "progress" feed (widget shows only the latest). */
 const PROGRESS_CAP = 20
 
@@ -36,6 +36,8 @@ export function createFlowMetaTool(onChange?: () => void) {
       'Manage structured workflow data (acceptance criteria, todos, review findings). ' +
       'Each key holds items with id (auto), description, and status. ' +
       'Known keys: criteria, todos, review_findings, resume (auto-continue notes), progress (display-only live feed). ' +
+      'Writes are atomic (cross-process lock); for multi-item writes prefer the batch actions ' +
+      '(add_batch with descriptions / update_batch with items) over parallel single-item calls. ' +
       'Use action=schema to see the expected shape for a key.',
     promptSnippet:
       'Manage workflow acceptance criteria, todos, and review findings (structured session data)',
@@ -44,11 +46,37 @@ export function createFlowMetaTool(onChange?: () => void) {
       'Use flow_meta with key "review_findings" to resolve or dismiss code review findings.',
     ],
     parameters: Type.Object({
-      action: StringEnum(['get', 'list', 'add', 'update', 'remove', 'schema'] as const),
+      action: StringEnum([
+        'get',
+        'list',
+        'add',
+        'add_batch',
+        'update',
+        'update_batch',
+        'remove',
+        'schema',
+      ] as const),
       key: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       description: Type.Optional(Type.String()),
       status: Type.Optional(Type.String()),
+      descriptions: Type.Optional(
+        Type.Array(Type.String(), {
+          description: 'For add_batch: descriptions to add atomically in one write',
+        }),
+      ),
+      items: Type.Optional(
+        Type.Array(
+          Type.Object({
+            id: Type.String(),
+            description: Type.Optional(Type.String()),
+            status: Type.Optional(Type.String()),
+          }),
+          {
+            description: 'For update_batch: items to update atomically in one write',
+          },
+        ),
+      ),
     }),
 
     async execute(
@@ -59,6 +87,8 @@ export function createFlowMetaTool(onChange?: () => void) {
         id?: string
         description?: string
         status?: string
+        descriptions?: string[]
+        items?: Array<{ id: string; description?: string; status?: string }>
       },
       _signal: AbortSignal | undefined,
       _onUpdate: unknown,
@@ -119,56 +149,107 @@ export function createFlowMetaTool(onChange?: () => void) {
         case 'add': {
           if (!args.key) return fail('Missing required field: key')
           if (!args.description) return fail('Missing required field: description')
-          const entry = metaAdd(state, args.key, args.description, args.status)
-          // Cap the display-only progress feed so it cannot grow unbounded
-          // across long runs (the widget only ever shows the latest entry).
-          if (args.key === 'progress') {
-            const all = state.metadata['progress']!
-            if (all.length > PROGRESS_CAP) state.metadata['progress'] = all.slice(-PROGRESS_CAP)
-          }
-          await saveState(ctx.cwd, state, sessionId)
+          // Atomic read-modify-write: parallel adds (e.g. the planner firing
+          // 11 adds in one turn) must not lose writes to a last-write-wins race.
+          let entry: MetaEntry | undefined
+          let total = 0
+          await mutateState(ctx.cwd, sessionId, (state) => {
+            entry = metaAdd(state, args.key!, args.description!, args.status)
+            // Cap the display-only progress feed so it cannot grow unbounded
+            // across long runs (the widget only ever shows the latest entry).
+            if (args.key === 'progress') {
+              const all = state.metadata['progress']!
+              if (all.length > PROGRESS_CAP) state.metadata['progress'] = all.slice(-PROGRESS_CAP)
+            }
+            total = state.metadata[args.key!]!.length
+          })
           onChange?.()
           return ok(
-            `Added item "${entry.id}" to "${args.key}". Total: ${
-              state.metadata[args.key]!.length
-            } items.`,
+            `Added item "${entry!.id}" to "${args.key}". Total: ${total} items.`,
           )
+        }
+
+        case 'add_batch': {
+          if (!args.key) return fail('Missing required field: key')
+          if (!args.descriptions || args.descriptions.length === 0)
+            return fail('Missing required field: descriptions (non-empty array)')
+          let added = 0
+          let total = 0
+          await mutateState(ctx.cwd, sessionId, (state) => {
+            for (const d of args.descriptions!) {
+              if (!d) continue
+              metaAdd(state, args.key!, d, args.status)
+              added += 1
+            }
+            if (args.key === 'progress') {
+              const all = state.metadata['progress']!
+              if (all.length > PROGRESS_CAP) state.metadata['progress'] = all.slice(-PROGRESS_CAP)
+            }
+            total = state.metadata[args.key!]!.length
+          })
+          onChange?.()
+          return ok(`Added ${added} items to "${args.key}" atomically. Total: ${total} items.`)
         }
 
         case 'update': {
           if (!args.key) return fail('Missing required field: key')
           const id = normalizeId(args.id)
           if (id === undefined) return fail('Missing required field: id')
-          const updated = metaUpdate(
-            state,
-            args.key,
-            id,
-            args.description !== undefined || args.status !== undefined
-              ? {
-                  ...(args.description !== undefined ? { description: args.description } : {}),
-                  ...(args.status !== undefined ? { status: args.status } : {}),
-                }
-              : {},
-          )
+          let updated: MetaEntry | undefined
+          await mutateState(ctx.cwd, sessionId, (state) => {
+            updated = metaUpdate(state, args.key!, id, {
+              ...(args.description !== undefined ? { description: args.description } : {}),
+              ...(args.status !== undefined ? { status: args.status } : {}),
+            })
+          })
           if (!updated) return fail(`Item "${id}" not found in "${args.key}".`)
-          await saveState(ctx.cwd, state, sessionId)
           onChange?.()
           return ok(`Updated item "${id}" in "${args.key}".`)
+        }
+
+        case 'update_batch': {
+          if (!args.key) return fail('Missing required field: key')
+          if (!args.items || args.items.length === 0)
+            return fail('Missing required field: items (non-empty array of {id, description?, status?})')
+          const updatedIds: string[] = []
+          const missing: string[] = []
+          await mutateState(ctx.cwd, sessionId, (state) => {
+            for (const item of args.items!) {
+              const id = normalizeId(item.id)
+              if (id === undefined) {
+                missing.push(String(item.id))
+                continue
+              }
+              const updated = metaUpdate(state, args.key!, id, {
+                ...(item.description !== undefined ? { description: item.description } : {}),
+                ...(item.status !== undefined ? { status: item.status } : {}),
+              })
+              if (updated) updatedIds.push(id)
+              else missing.push(id)
+            }
+          })
+          if (updatedIds.length === 0)
+            return fail(`None of the items were found in "${args.key}": ${missing.join(', ')}.`)
+          onChange?.()
+          return ok(
+            `Updated ${updatedIds.length} items in "${args.key}" atomically.` +
+              (missing.length > 0 ? ` (not found: ${missing.join(', ')})` : ''),
+          )
         }
 
         case 'remove': {
           if (!args.key) return fail('Missing required field: key')
           const id = normalizeId(args.id)
           if (id === undefined) return fail('Missing required field: id')
-          const removed = metaRemove(state, args.key, id)
+          let removed = false
+          let remaining = 0
+          await mutateState(ctx.cwd, sessionId, (state) => {
+            removed = metaRemove(state, args.key!, id)
+            remaining = (state.metadata[args.key!] ?? []).length
+          })
           if (!removed) return fail(`Item "${id}" not found in "${args.key}".`)
-          await saveState(ctx.cwd, state, sessionId)
           onChange?.()
-          return ok(
-            `Removed item "${id}" from "${args.key}". ${
-              (state.metadata[args.key] ?? []).length
-            } items remaining.`,
-          )
+          return ok(`Removed item "${id}" from "${args.key}". ${remaining} items remaining.`)
         }
 
         default:

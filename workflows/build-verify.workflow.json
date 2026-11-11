@@ -89,7 +89,7 @@
       "type": "sub_agent",
       "phase": "verification",
       "subAgentType": "adx-verifier",
-      "prompt": "## Criteria\n{{criteriaList}}\n\n## Modified Files\n{{modifiedFiles}}\n\nVerify each criterion marked [NEEDS VERIFICATION]. Read the code, run tests if applicable, then use flow_meta (key \"criteria\") to update each criterion's status to passed or failed.",
+      "prompt": "## Project size\n{{projectFileCount}} files, {{projectLines}} lines total.\n\n## Criteria\n{{criteriaList}}\n\n## Modified Files\n{{modifiedFiles}}\n\nVerify each criterion marked [NEEDS VERIFICATION]. Keep the effort PROPORTIONAL to the project size: for a small project (under ~2000 total lines) do a focused read of the changed files plus ONE headless smoke run of the main user flows — do not build an exhaustive test suite; for larger projects run the existing test suite plus targeted checks. Then record the results with a SINGLE flow_meta call: action \"update_batch\", key \"criteria\", items: one {\"id\",\"status\"} object per verified criterion (\"passed\" or \"failed\").",
       "transitions": [
         { "when": { "type": "param", "key": "skip_review", "value": "true" }, "goto": "summarize" },
         {

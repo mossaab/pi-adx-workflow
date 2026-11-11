@@ -232,7 +232,7 @@ The workflow never parks itself on you:
 
 | Tool | Purpose |
 | --- | --- |
-| `flow_meta` | Shared workflow metadata store: `criteria`, `todos`, `review_findings`, `resume` (auto-continue notes) and `progress` (live display feed) |
+| `flow_meta` | Shared workflow metadata store: `criteria`, `todos`, `review_findings`, `resume` (auto-continue notes) and `progress` (live display feed). Writes are atomic (per-process write chain + cross-process file lock — parent and `pi -p` children never lose updates); multi-item writes: `add_batch` (descriptions) / `update_batch` (items) |
 | `flow_step_done` | Ends the current workflow step; the executor evaluates transitions and injects the next prompt (or a nudge) |
 | `flow_plan_done` | Signals that planning is complete and hands off to the build pipeline (auto-launch in `--adx-auto`, picker in interactive mode) |
 | `ask_user` | Structured question (choice / confirm / text) that pauses the turn for a user answer — plan-mode clarification |
@@ -267,9 +267,32 @@ pi -p --mode json --extension <adx-workflow> --no-extensions --no-mcp --no-skill
 - **Result contract**: the child updates `flow_meta` (criteria /
   review_findings) and writes a report to `.pi/adx-flow/reports/<agent>.md`.
 - **Model**: children use the user's default model; set `ADX_FLOW_MODEL`
-  (e.g. `litellm/qwen3.8-27b`) to pin a cheaper model for flow children.
+  (e.g. `litellm/qwen3.8-27b`) to pin a cheaper model for flow children, or a
+  per-step `"model"` field on any `sub_agent` step in a workflow file
+  (takes precedence over `ADX_FLOW_MODEL`) — e.g. a fast model for
+  verify/review on small projects.
 - **Env overrides**: `ADX_PI_BIN` (pi CLI path), `ADX_EXTENSION_PATH`
   (extension entry for the child).
+
+### Performance: no redundant verification
+
+The executor keeps verification cheap in three ways:
+
+- **Re-run short-circuit** — after a successful verify pass the executor
+  records a content hash of the project files (`.pi/`, `node_modules/`,
+  `.git/`, build dirs excluded). On re-entry to the verify step, if the hash
+  is unchanged AND the step's metadata gate is now met (e.g. the store
+  caught up after a lost write), the expensive verifier pass is skipped and
+  the previous report is reused — a small project no longer pays 3-4 full
+  verifier passes to re-converge on the same verdict.
+- **Proportional effort** — verify prompts get `{{projectFileCount}}` /
+  `{{projectLines}}` template variables and instruct the verifier to scale
+  the effort to the project size (small project: focused read + one smoke
+  run, not an exhaustive test suite).
+- **Atomic store** — the state file is protected by a cross-process lock
+  (parent + children) and `flow_meta` mutations are atomic read-modify-writes;
+  the verifier records all criterion verdicts in a single `update_batch` call,
+  so "the verifier said PASS but the store disagrees" re-loops can't happen.
 
 ## Workflows
 
