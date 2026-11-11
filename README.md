@@ -274,7 +274,7 @@ Workflow files are plain JSON state machines: `workflows/*.workflow.json`
 (bundled), overridable per project in `.pi/adx-workflows/` (highest
 precedence) and per user in `~/.pi/agent/workflows/`.
 
-Three workflows are bundled:
+Four workflows are bundled:
 
 - `build` — **simple**: `work_location → build → summarize`. No automated
   verification, no code review; the builder self-checks before marking
@@ -283,6 +283,11 @@ Three workflows are bundled:
   `work_location → build → verify → code_review → finalize → summarize`.
 - `pr-review` — PR review + fixes + squash-merge (requires `gh`), launched
   with `/adx-build pr-review pr_number=123`.
+- `commit` — **commit & push**: `check_status → stage → commit → push →
+  summarize`. Stages only the session's files (never `git add -A`), commits
+  with a clear message, and rebases onto origin if the push is rejected.
+  Launched with `/adx-build commit` (optional `message="..."` param to set
+  the commit message explicitly).
 
 ### Authoring reference (short)
 
@@ -384,6 +389,7 @@ src/
 workflows/
 ├── build.workflow.json
 ├── build-verify.workflow.json
+├── commit.workflow.json
 └── pr-review.workflow.json
 scripts/
 ├── find-jiti.mjs     # locate jiti in your pi install (used by the dev scripts)

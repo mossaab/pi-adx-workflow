@@ -1,0 +1,83 @@
+{
+  "metadata": {
+    "id": "commit",
+    "name": "Commit & Push",
+    "description": "Commit and push the current work: check git status, stage only the relevant files (never -A), commit with a clear message, push (rebase onto origin and fix conflicts if the push is rejected). Launch with: /adx-build commit, or /adx-build commit message=\"your message\" to set the commit message explicitly.",
+    "version": "1.0.0",
+    "color": "#f59e0b",
+    "parameters": [
+      {
+        "id": "message",
+        "label": "Commit message",
+        "description": "Optional: the exact commit message to use. If omitted, the agent writes a clear message from the diff.",
+        "required": false
+      }
+    ]
+  },
+  "entryStep": "check_status",
+  "settings": {
+    "maxIterations": 20
+  },
+  "steps": [
+    {
+      "id": "check_status",
+      "name": "Check status",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Run `git status` and identify exactly which files are modified, added, or deleted. Pick out the files that belong to this session's work (do NOT include unrelated or untracked junk like .DS_Store, logs, editor files). Do not stage or commit anything in this step. Call flow_step_done with a result that lists the files to stage.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "stage" }
+      ]
+    },
+    {
+      "id": "stage",
+      "name": "Stage files",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Stage ONLY the files listed in the previous step, using explicit paths: `git add <file1> <file2> ...`. NEVER use `git add -A` or `git add .` — add your files and your files only. Then verify with `git status` that exactly the intended files are staged (and nothing else). Call flow_step_done when the staging is correct.",
+      "nudgePrompt": "Re-check `git status`: only the intended files may be staged. Unstage anything extra with `git restore --staged <file>`, then stage the missing files with explicit paths (never `git add -A` / `git add .`). Call flow_step_done once the staging is exact.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "commit" }
+      ]
+    },
+    {
+      "id": "commit",
+      "name": "Commit",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Create the commit with `git commit -m \"<message>\"`. If the launch parameter `message` was provided, use it verbatim; otherwise inspect the staged diff (`git diff --staged`) and write a clear, conventional message that describes the change (e.g. `feat: ...`, `fix: ...`, `chore: ...`). Verify with `git log -1 --stat` that the commit landed with the right files. Call flow_step_done when done.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "push" }
+      ]
+    },
+    {
+      "id": "push",
+      "name": "Push",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Run `git push`. If the push is rejected because origin has new commits that you don't have:\n1. `git fetch origin`\n2. Rebase your commit on top of them: `git rebase origin/<branch>` (e.g. `git rebase origin/main`)\n3. Fix any conflicts that arise, preserving the intent of both sides, then `git rebase --continue`\n4. Run `git push` again.\nPrefer rebase over force-push; only use `git push --force-with-lease` if the rebase rewrote commits that were already pushed to the branch. Call flow_step_done only when the push has succeeded (verify with `git status` showing the branch is up to date with origin).",
+      "nudgePrompt": "The push has not succeeded yet. Check the push error, fetch and rebase onto the latest origin commits, resolve any conflicts, and push again. Call flow_step_done only once `git status` shows the branch is up to date with origin.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "summarize" }
+      ]
+    },
+    {
+      "id": "summarize",
+      "name": "Summarize",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Produce a one-line summary of what was committed and pushed: commit hash, commit message, branch, and remote state (e.g. `Pushed abc1234 \"feat: ...\" to origin/main`). Mention if a rebase was needed. Call flow_step_done when done.",
+      "transitions": [
+        { "when": { "type": "always" }, "goto": "$done" }
+      ]
+    }
+  ],
+  "startCondition": {
+    "type": "always"
+  }
+}
