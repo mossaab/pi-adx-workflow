@@ -15,6 +15,8 @@
  *   /adx-resume        resume a blocked/waiting workflow
  *   /adx-cancel        cancel the current workflow run
  *   /adx-config        show config / "edit" opens a menu / "set key=value [project]"
+ * Flag:
+ *   --adx-auto         unattended pipeline: plan → build → verify → recap without approvals
  * Shortcut:
  *   Ctrl+Alt+A   toggle plan mode
  */
@@ -112,7 +114,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       await executor.onStepDone(info)
     }),
   )
-  // OpenFox-style structured question tool (plan-mode clarification):
+  // Structured question tool for plan-mode clarification:
   // choice / confirm / text dialogs pause the turn until the user answers
   // (a dismissed prompt = skip → proceed with best judgment).
   pi.registerTool(createAskUserTool())

@@ -35,7 +35,7 @@ export function createFlowMetaTool(onChange?: () => void) {
     description:
       'Manage structured workflow data (acceptance criteria, todos, review findings). ' +
       'Each key holds items with id (auto), description, and status. ' +
-      'Known keys: criteria, todos, review_findings, progress (display-only live feed). ' +
+      'Known keys: criteria, todos, review_findings, resume (auto-continue notes), progress (display-only live feed). ' +
       'Use action=schema to see the expected shape for a key.',
     promptSnippet:
       'Manage workflow acceptance criteria, todos, and review findings (structured session data)',

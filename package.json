@@ -1,7 +1,7 @@
 {
   "name": "pi-adx-workflow",
-  "version": "0.1.0",
-  "description": "plan → build/verify → review → summarize workflow for pi-coding-agent, with in-house sub-agent propagation.",
+  "version": "1.0.0",
+  "description": "Declarative plan → build → verify → review workflow for pi-coding-agent, with in-house isolated sub-agents and never-stop auto-continue.",
   "type": "module",
   "license": "MIT",
   "author": "mossaab",
@@ -10,14 +10,19 @@
     "type": "git",
     "url": "git+https://github.com/mossaab/pi-adx-workflow.git"
   },
+  "bugs": {
+    "url": "https://github.com/mossaab/pi-adx-workflow/issues"
+  },
   "keywords": [
     "pi",
     "pi-coding-agent",
     "pi-extension",
     "pi-package",
+    "pi-adx-workflow",
     "workflow",
     "subagent",
     "acceptance-criteria",
+    "planning",
     "verification",
     "code-review"
   ],

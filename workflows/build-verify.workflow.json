@@ -2,7 +2,7 @@
   "metadata": {
     "id": "build-verify",
     "name": "Build & Verify",
-    "description": "Standard build-verify loop. Builder implements criteria, verifier checks them, reviewer raises findings, builder finalizes, summary with 'what to test'. Launch with skip_review=true to skip the code review step (verify only).",
+    "description": "Full build → verify → review pipeline: the builder implements the criteria, an isolated verifier checks them, a code reviewer raises findings, the builder finalizes, then a summary with 'what to test' is produced. Launch with skip_review=true to skip the code review step (verify only).",
     "version": "1.0.0",
     "color": "#3b82f6",
     "parameters": [

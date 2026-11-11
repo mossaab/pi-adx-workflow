@@ -8,7 +8,7 @@
 **in-house sub-agent propagation**: flow children (verifier / code reviewer)
 run as isolated `pi -p` child processes — no pi-subagents dependency.
 
-It reproduces the core working method:
+It implements a complete working method:
 
 1. **Plan mode** (read-only) — the planner explores and proposes **acceptance
    criteria** (`flow_meta`, key `criteria`, status `pending`).
@@ -72,7 +72,7 @@ Variants:
 # project-local (written to .pi/settings.json, loads after project trust)
 pi install --local git:github.com/mossaab/pi-adx-workflow
 
-# from npm (once published)
+# from npm
 pi install npm:pi-adx-workflow
 ```
 
@@ -109,6 +109,7 @@ re-create the symlink.
 /adx-status                  show current workflow state
 /adx-resume                  resume a blocked/waiting workflow
 /adx-cancel                  cancel the current run
+/adx-config                  show the effective config ("edit" menu / "set key=value")
 Ctrl+Alt+A                   toggle plan mode
 ```
 
@@ -231,8 +232,10 @@ The workflow never parks itself on you:
 
 | Tool | Purpose |
 | --- | --- |
-| `flow_meta` | CRUD for `criteria` / `todos` / `review_findings` / `resume` (shared workflow metadata store) |
+| `flow_meta` | Shared workflow metadata store: `criteria`, `todos`, `review_findings`, `resume` (auto-continue notes) and `progress` (live display feed) |
 | `flow_step_done` | Ends the current workflow step; the executor evaluates transitions and injects the next prompt (or a nudge) |
+| `flow_plan_done` | Signals that planning is complete and hands off to the build pipeline (auto-launch in `--adx-auto`, picker in interactive mode) |
+| `ask_user` | Structured question (choice / confirm / text) that pauses the turn for a user answer — plan-mode clarification |
 
 ## Sub-agents
 
