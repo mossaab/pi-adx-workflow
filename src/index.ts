@@ -95,7 +95,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     notify: (msg, level) => ctx?.ui.notify(msg, level ?? 'info'),
     updateWidget: () => {
       if (config.showWidget === false) return
-      if (ctx) refreshFlowWidget(ctx)
+      if (ctx) refreshFlowWidget(ctx, sessionId)
     },
     widgetEnabled: () => config.showWidget !== false,
     // Filled in once a ctx is available (session_start)
@@ -105,7 +105,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   pi.registerTool(
     createFlowMetaTool(() => {
       if (config.showWidget === false) return
-      if (ctx) refreshFlowWidget(ctx)
+      if (ctx) refreshFlowWidget(ctx, sessionId)
     }),
   )
   pi.registerTool(
@@ -149,7 +149,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // ------------------------------------------------------------------ mode helpers
   function showBadge(badge: string | undefined): void {
     if (config.showWidget === false) badge = undefined
-    if (ctx) setModeBadge(ctx, badge)
+    if (ctx) setModeBadge(ctx, badge, sessionId)
   }
 
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
@@ -240,7 +240,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (_args, c) => {
       ctx = c
       await executor.cancel(c)
-      if (config.showWidget !== false) clearFlowWidget(c)
+      if (config.showWidget !== false) clearFlowWidget(c, sessionId)
     },
   })
 

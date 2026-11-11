@@ -456,12 +456,16 @@ export class AdxExecutor {
     // refreshFlowWidget() below.
     const activityCtx = this.lastCtx
     if (activityCtx && this.deps.widgetEnabled?.() !== false) {
-      setSubAgentActivity(activityCtx, {
-        agent: step.subAgentType,
-        step: step.name,
-        task: baseTask,
-        startedAt: Date.now(),
-      })
+      setSubAgentActivity(
+        activityCtx,
+        {
+          agent: step.subAgentType,
+          step: step.name,
+          task: baseTask,
+          startedAt: Date.now(),
+        },
+        this.sessionId,
+      )
     }
     let result = await this.spawn(step.subAgentType, task, this.childOpts())
 
@@ -502,7 +506,7 @@ export class AdxExecutor {
     // Child is done: restore the static criteria/step widget (also picks up
     // the child's flow_meta updates) now that the animated activity widget
     // is no longer needed.
-    if (this.lastCtx && this.deps.widgetEnabled?.() !== false) refreshFlowWidget(this.lastCtx)
+    if (this.lastCtx && this.deps.widgetEnabled?.() !== false) refreshFlowWidget(this.lastCtx, this.sessionId)
     const outcome: StepOutcome = result.ok
       ? { result: 'success', output: { content } }
       : { result: 'error', output: { content: content || `sub-agent error: ${result.error}` } }

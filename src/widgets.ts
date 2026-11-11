@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
-import type { FlowState } from './store.js'
+import { stateFileFor, type FlowState } from './store.js'
 
 const WIDGET_KEY = 'adx-flow'
 const STATUS_KEY = 'adx-flow'
@@ -41,13 +41,37 @@ function formatElapsed(ms: number): string {
   return `${s}s`
 }
 
-function readState(cwd: string): FlowState | undefined {
+function readRaw(path: string): FlowState | undefined {
   try {
-    const raw = readFileSync(join(cwd, '.pi', 'adx-flow', 'state.json'), 'utf8')
-    return JSON.parse(raw) as FlowState
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<FlowState>
+    return {
+      version: 1,
+      metadata: parsed.metadata ?? {},
+      execution: parsed.execution ?? null,
+      planMode: parsed.planMode ?? false,
+    }
   } catch {
     return undefined
   }
+}
+
+/**
+ * Read the widget-relevant state for a session.
+ * - parent session: the per-session file `<cwd>/.pi/adx-flow/state/<sid>.json`;
+ *   if it doesn't exist yet (new session), fall back to the legacy shared file
+ *   when it holds an in-flight run (mirrors the store's one-time adoption);
+ * - flow children (ADX_CHILD=1): the parent's file via ADX_FLOW_STATE.
+ */
+function readState(cwd: string, sessionId?: string): FlowState | undefined {
+  const state = readRaw(stateFileFor(cwd, sessionId))
+  if (state) return state
+  if (sessionId && process.env.ADX_CHILD !== '1') {
+    const legacy = readRaw(join(cwd, '.pi', 'adx-flow', 'state.json'))
+    if (legacy?.execution && legacy.execution.status !== 'done' && !legacy.execution.migratedTo) {
+      return legacy
+    }
+  }
+  return undefined
 }
 
 const STATUS_ICON: Record<string, string> = {
@@ -69,8 +93,8 @@ const PLAIN_THEME = {
 }
 
 /** Render the adx-flow widget (criteria + step) or clear it when idle. */
-export function refreshFlowWidget(ctx: ExtensionContext): void {
-  const state = readState(ctx.cwd)
+export function refreshFlowWidget(ctx: ExtensionContext, sessionId?: string): void {
+  const state = readState(ctx.cwd, sessionId)
   const ui = ctx.ui
 
   if (!state || (!state.execution && Object.keys(state.metadata).length === 0)) {
@@ -146,20 +170,24 @@ export function refreshFlowWidget(ctx: ExtensionContext): void {
 /**
  * Set (or clear) the footer mode badge, e.g. `adx: [PLAN] read-only`.
  * The badge survives widget refreshes while no workflow is running; an
- * active workflow's status line takes precedence over it.
+ * active workflow's status line takes precedence over it (a finished run
+ * does not block the badge).
  */
-export function setModeBadge(ctx: ExtensionContext, badge: string | undefined): void {
+export function setModeBadge(ctx: ExtensionContext, badge: string | undefined, sessionId?: string): void {
   modeBadge = badge
-  const state = readState(ctx.cwd)
+  const state = readState(ctx.cwd, sessionId)
+  const active =
+    state?.execution != null && state.execution.status !== 'done'
   if (badge === undefined) {
-    if (!state?.execution) ctx.ui.setStatus(STATUS_KEY, undefined)
+    if (!active) ctx.ui.setStatus(STATUS_KEY, undefined)
     return
   }
-  if (!state?.execution) ctx.ui.setStatus(STATUS_KEY, badge)
+  if (!active) ctx.ui.setStatus(STATUS_KEY, badge)
 }
 
 /** Clear the widget + status (e.g. on /adx-cancel). */
-export function clearFlowWidget(ctx: ExtensionContext): void {
+export function clearFlowWidget(ctx: ExtensionContext, sessionId?: string): void {
+  void sessionId // widget keys are TUI-scoped; parameter kept for call-site symmetry
   modeBadge = undefined
   ctx.ui.setWidget(WIDGET_KEY, undefined)
   ctx.ui.setStatus(STATUS_KEY, undefined)
@@ -198,7 +226,11 @@ export interface SubAgentActivity {
  * - a "what is it doing now" line shows the latest display-only progress
  *   note the child logged under the "progress" metadata key.
  */
-export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentActivity): void {
+export function setSubAgentActivity(
+  ctx: ExtensionContext,
+  activity: SubAgentActivity,
+  sessionId?: string,
+): void {
   const ui = ctx.ui
   const taskOneLine = truncate(
     activity.task.replace(/\s+/g, ' ').trim(),
@@ -224,7 +256,7 @@ export function setSubAgentActivity(ctx: ExtensionContext, activity: SubAgentAct
         // it works, so the widget stays live without re-reading every frame.
         if (now - lastStateReadAt >= STATE_REFRESH_MS) {
           lastStateReadAt = now
-          liveState = readState(ctx.cwd)
+          liveState = readState(ctx.cwd, sessionId)
         }
         const spin = t.fg('accent', SPINNER_FRAMES[frame] ?? '●')
         const head =
