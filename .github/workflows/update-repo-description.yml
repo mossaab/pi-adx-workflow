@@ -1,0 +1,56 @@
+name: Update repo description
+
+# Keeps the GitHub repository's short description in sync with the first
+# meaningful paragraph of README.md (title, badges and link-only lines are
+# skipped, markdown formatting is stripped).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - ".github/workflows/update-repo-description.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  repository: write
+
+jobs:
+  update-description:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract short description from README
+        id: extract
+        run: |
+          desc="$(awk '
+            /^[[:space:]]*$/  { if (started) exit; next }   # stop at first blank line after paragraph start
+            /^#/             { next }                       # headings
+            /^!\[/           { next }                       # image lines
+            /^\[!\[/         { next }                       # badge lines
+            /^[-*+][[:space:]]/ { next }                    # list items
+            { started = 1; print }
+          ' README.md | tr '\n' ' ' \
+            | sed -E 's/\[([^]]+)\]\(([^)]*)\)/\1/g; s/\*\*//g; s/`//g; s/  +/ /g; s/ $//')"
+          desc="${desc:0:350}"
+          if [ -z "$desc" ]; then
+            echo "::error::No description found in README.md"
+            exit 1
+          fi
+          echo "description=$desc" >> "$GITHUB_OUTPUT"
+          echo "Short description: $desc"
+
+      - name: Apply description to the GitHub repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current="$(gh repo view "$GITHUB_REPOSITORY" --json description --jq .description || true)"
+          if [ "$current" = "${{ steps.extract.outputs.description }}" ]; then
+            echo "Description already up to date — nothing to do."
+          else
+            gh repo edit --description "${{ steps.extract.outputs.description }}"
+            echo "Repository description updated."
+          fi
