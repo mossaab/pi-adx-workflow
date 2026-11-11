@@ -35,6 +35,7 @@ import { TERMINAL_DONE, TERMINAL_BLOCKED } from './types.js'
 import {
   loadState,
   saveState,
+  stateFileFor,
   metaConditionMet,
   pendingCriteriaCount,
   type FlowState,
@@ -47,7 +48,7 @@ import {
   type TemplateContext,
 } from './templates.js'
 import { loadWorkflow, parseLaunchParams } from './workflows.js'
-import { spawnFlowAgent, resumeFlowAgent, type SpawnResult } from './subagent.js'
+import { spawnFlowAgent, resumeFlowAgent, type SpawnResult, type SpawnOptions } from './subagent.js'
 import { refreshFlowWidget, setSubAgentActivity } from './widgets.js'
 import type { StepDoneInfo } from './tools.js'
 
@@ -69,9 +70,18 @@ export interface ExecutorDeps {
   /** When it returns false, TUI widgets (flow widget, sub-agent activity) are suppressed (config `showWidget`). */
   widgetEnabled?: () => boolean
   /** Injectable spawner (e2e). Default: in-house `pi -p` child process. */
-  spawn?: (agent: string, task: string) => Promise<SpawnResult>
+  spawn?: (
+    agent: string,
+    task: string,
+    opts?: Omit<SpawnOptions, 'resume'>,
+  ) => Promise<SpawnResult>
   /** Injectable never-stop resume (e2e). Default: re-spawn the persisted child session. */
-  resume?: (agent: string, runId: string, message: string) => Promise<SpawnResult>
+  resume?: (
+    agent: string,
+    runId: string,
+    message: string,
+    opts?: Omit<SpawnOptions, 'resume'>,
+  ) => Promise<SpawnResult>
 }
 
 function truncate(text: string, max = 10_000): string {
@@ -80,13 +90,24 @@ function truncate(text: string, max = 10_000): string {
 
 export class AdxExecutor {
   private cwd: string | undefined
+  /** Pi session id of the driving session — the per-session state file key. */
+  private sessionId: string | undefined
   private workflow: WorkflowDefinition | undefined
   private run: ExecutionState | undefined
   private lastCtx: ExtensionContext | undefined
-  private spawn: (agent: string, task: string) => Promise<SpawnResult>
+  private spawn: (
+    agent: string,
+    task: string,
+    opts?: Omit<SpawnOptions, 'resume'>,
+  ) => Promise<SpawnResult>
   /** Never-stop child resume. Named `resumeRun` (not `resume`) so it does not
    * shadow the workflow `resume(ctx)` method. */
-  private resumeRun: (agent: string, runId: string, message: string) => Promise<SpawnResult>
+  private resumeRun: (
+    agent: string,
+    runId: string,
+    message: string,
+    opts?: Omit<SpawnOptions, 'resume'>,
+  ) => Promise<SpawnResult>
   private deps: ExecutorDeps
   /** Set when the LLM calls flow_step_done in the current run (per agent-step turn). */
   private stepDoneCalled = false
@@ -99,12 +120,26 @@ export class AdxExecutor {
     this.deps = deps
     this.spawn =
       deps.spawn ??
-      ((agent, task) =>
-        spawnFlowAgent(agent, task, { cwd: this.cwd ?? process.cwd() }))
+      ((agent, task, opts) => spawnFlowAgent(agent, task, { cwd: this.cwd ?? process.cwd(), ...opts }))
     this.resumeRun =
       deps.resume ??
-      ((agent, runId, message) =>
-        resumeFlowAgent(agent, runId, message, { cwd: this.cwd ?? process.cwd() }))
+      ((agent, runId, message, opts) =>
+        resumeFlowAgent(agent, runId, message, { cwd: this.cwd ?? process.cwd(), ...opts }))
+  }
+
+  /** Child-process options: the parent's per-session state file (ADX_FLOW_STATE). */
+  private childOpts() {
+    return {
+      cwd: this.cwd ?? process.cwd(),
+      statePath: stateFileFor(this.cwd ?? process.cwd(), this.sessionId),
+    }
+  }
+
+  /** Bind the driving pi session (its id keys the per-session state file). */
+  private bindCtx(ctx: ExtensionContext): void {
+    this.lastCtx = ctx
+    this.cwd = ctx.cwd
+    this.sessionId = ctx.sessionManager?.getSessionId?.()
   }
 
   // ------------------------------------------------------------------ queries
@@ -117,8 +152,7 @@ export class AdxExecutor {
 
   // ------------------------------------------------------------------ launch
   async launch(workflowId: string, ctx: ExtensionContext, rawArgs?: string): Promise<void> {
-    this.lastCtx = ctx
-    this.cwd = ctx.cwd
+    this.bindCtx(ctx)
 
     const def = loadWorkflow(ctx.cwd, workflowId)
     if (!def) {
@@ -135,7 +169,7 @@ export class AdxExecutor {
     }
 
     // startCondition gate (metadata conditions only in this port)
-    const state = await loadState(ctx.cwd)
+    const state = await loadState(ctx.cwd, this.sessionId)
     if (def.startCondition && !this.matchesCondition(def.startCondition, { result: '', output: {} }, state)) {
       this.deps.notify(`adx: start condition for "${def.metadata.name}" not met`, 'warning')
       return
@@ -154,7 +188,7 @@ export class AdxExecutor {
       updatedAt: new Date().toISOString(),
     }
     state.execution = this.run
-    await saveState(ctx.cwd, state)
+    await saveState(ctx.cwd, state, this.sessionId)
 
     this.deps.notify(`adx: starting workflow "${def.metadata.name}"`, 'info')
     await this.enterStep(def.entryStep)
@@ -162,9 +196,8 @@ export class AdxExecutor {
 
   // ------------------------------------------------------------------ resume / cancel / restore
   async resume(ctx: ExtensionContext): Promise<void> {
-    this.lastCtx = ctx
-    this.cwd = ctx.cwd
-    const state = await loadState(ctx.cwd)
+    this.bindCtx(ctx)
+    const state = await loadState(ctx.cwd, this.sessionId)
     if (!state.execution) {
       this.deps.notify('adx: no workflow run to resume', 'info')
       return
@@ -193,7 +226,7 @@ export class AdxExecutor {
   }
 
   async cancel(ctx: ExtensionContext): Promise<void> {
-    this.lastCtx = ctx
+    this.bindCtx(ctx)
     if (!this.run) {
       this.deps.notify('adx: no active workflow run', 'info')
       return
@@ -201,17 +234,16 @@ export class AdxExecutor {
     const name = this.run.workflowName
     this.run = undefined
     this.workflow = undefined
-    const state = await loadState(ctx.cwd ?? process.cwd())
+    const state = await loadState(ctx.cwd, this.sessionId)
     state.execution = null
-    await saveState(ctx.cwd ?? process.cwd(), state)
+    await saveState(ctx.cwd, state, this.sessionId)
     this.deps.updateWidget?.()
     this.deps.notify(`adx: cancelled run "${name}"`, 'info')
   }
 
   /** Restore a persisted run after pi restarts (called from session_start). */
   async restore(state: FlowState, ctx: ExtensionContext): Promise<void> {
-    this.lastCtx = ctx
-    this.cwd = ctx.cwd
+    this.bindCtx(ctx)
     const execution = state.execution
     if (!execution) return
     const def = loadWorkflow(ctx.cwd, execution.workflowId)
@@ -239,9 +271,9 @@ export class AdxExecutor {
   }
 
   async showStatus(ctx: ExtensionContext): Promise<void> {
-    this.lastCtx = ctx
+    this.bindCtx(ctx)
     if (!this.run || !this.workflow) {
-      const state = await loadState(ctx.cwd)
+      const state = await loadState(ctx.cwd, this.sessionId)
       if (!state.execution) {
         this.deps.notify('adx: no workflow run (start with /adx-build)', 'info')
         return
@@ -249,8 +281,8 @@ export class AdxExecutor {
       this.run = state.execution
       this.workflow = loadWorkflow(ctx.cwd, state.execution.workflowId)
     }
-    const criteria = (await loadState(ctx.cwd)).metadata['criteria'] ?? []
-    const findings = (await loadState(ctx.cwd)).metadata['review_findings'] ?? []
+    const criteria = (await loadState(ctx.cwd, this.sessionId)).metadata['criteria'] ?? []
+    const findings = (await loadState(ctx.cwd, this.sessionId)).metadata['review_findings'] ?? []
     const lines = [
       `workflow: ${this.run.workflowName}`,
       `status:   ${this.run.status}`,
@@ -333,7 +365,7 @@ export class AdxExecutor {
     }
     // Auto-skip: a matching param transition takes the step without user
     // input (e.g. `auto=true` skips the "Where to work" picker in auto mode).
-    const autoState = await loadState(this.cwd ?? process.cwd())
+    const autoState = await loadState(this.cwd ?? process.cwd(), this.sessionId)
     const auto = step.transitions.find(
       (t) => t.when.type === 'param' && this.matchesCondition(t.when, { result: '', output: {} }, autoState),
     )
@@ -350,6 +382,18 @@ export class AdxExecutor {
     this.run.status = 'waiting'
     await this.persist()
     this.deps.updateWidget?.()
+
+    // Non-interactive mode (print/json, ctx.hasUI === false): a user step
+    // needs a dialog-capable UI. The run stays "waiting" (resumable via
+    // /adx-resume from a TUI/RPC session).
+    if (!ctx.hasUI) {
+      this.deps.notify(
+        `adx: user step "${step.name}" needs an interactive UI — resume it with /adx-resume in a TUI/RPC session`,
+        'info',
+      )
+      this.deps.updateWidget?.()
+      return
+    }
 
     const choice = await ctx.ui.select(`adx: ${step.name}`, choices)
     if (choice === undefined) {
@@ -400,10 +444,10 @@ export class AdxExecutor {
     // Fresh run → reset the display-only progress feed so stale notes from a
     // previous run of this step don't mislead the live widget.
     {
-      const state = await loadState(this.cwd)
+      const state = await loadState(this.cwd, this.sessionId)
       if (state.metadata['progress']) {
         delete state.metadata['progress']
-        await saveState(this.cwd, state)
+        await saveState(this.cwd, state, this.sessionId)
       }
     }
     // Animated activity widget: spinner + agent/step + live elapsed time +
@@ -419,7 +463,7 @@ export class AdxExecutor {
         startedAt: Date.now(),
       })
     }
-    let result = await this.spawn(step.subAgentType, task)
+    let result = await this.spawn(step.subAgentType, task, this.childOpts())
 
     // Transient busy: the child session was still streaming when the task
     // prompt was injected ("Agent is already processing"). It will go idle
@@ -433,7 +477,7 @@ export class AdxExecutor {
         'info',
       )
       await new Promise((r) => setTimeout(r, delayMs))
-      result = await this.spawn(step.subAgentType, task)
+      result = await this.spawn(step.subAgentType, task, this.childOpts())
     }
 
     // Never-stop: if the child stopped/died (e.g. context pressure, timeout)
@@ -444,6 +488,7 @@ export class AdxExecutor {
         step.subAgentType,
         result.runId,
         'Continue from where you stopped. Finish the task, complete any flow_meta updates, and write the final report to the report file named in your original task. Do not repeat work already done.',
+        this.childOpts(),
       )
     }
 
@@ -518,7 +563,7 @@ export class AdxExecutor {
       },
     }
 
-    const state = await loadState(this.cwd)
+    const state = await loadState(this.cwd, this.sessionId)
     for (const t of step.transitions) {
       if (this.matchesCondition(t.when, outcome, state)) {
         this.run.lastStepOutput = outcome.output
@@ -579,7 +624,7 @@ export class AdxExecutor {
       return undefined
     }
 
-    const state = await loadState(this.cwd)
+    const state = await loadState(this.cwd, this.sessionId)
     const criteriaList = formatCriteriaList(state.metadata['criteria'] ?? [])
     const resumeNotes = state.metadata['resume'] ?? []
     const resumeNote =
@@ -606,7 +651,7 @@ export class AdxExecutor {
   // ------------------------------------------------------------------ transitions
   private async advance(step: WorkflowStep, outcome: StepOutcome): Promise<void> {
     if (!this.run || !this.cwd) return
-    const state = await loadState(this.cwd)
+    const state = await loadState(this.cwd, this.sessionId)
     for (const t of step.transitions) {
       if (this.matchesCondition(t.when, outcome, state)) {
         this.run.lastStepOutput = outcome.output
@@ -715,10 +760,10 @@ export class AdxExecutor {
 
   private async persist(): Promise<void> {
     if (!this.run || !this.cwd) return
-    const state = await loadState(this.cwd)
+    const state = await loadState(this.cwd, this.sessionId)
     state.execution = this.run
     this._lastState = state
-    await saveState(this.cwd, state)
+    await saveState(this.cwd, state, this.sessionId)
   }
 
   private templateContext(): TemplateContext {

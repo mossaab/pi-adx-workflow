@@ -31,7 +31,7 @@ import {
   getBuildModeTools,
   planModeBashGuard,
 } from './modes.js'
-import { loadState } from './store.js'
+import { loadState, mutateState } from './store.js'
 import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
@@ -62,6 +62,20 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   let ctx: ExtensionContext | undefined
   /** User/project config (loaded at session_start; defaults until then). */
   let config: AdxConfig = {}
+  /** Pi session id — keys the per-session adx state file (own plan per session). */
+  let sessionId: string | undefined
+
+  /** Persist the plan-mode flag into the session's state file (resume-friendly). */
+  function persistPlanMode(on: boolean): void {
+    const c = ctx
+    if (!c) return
+    const sid = sessionId ?? c.sessionManager.getSessionId()
+    void mutateState(c.cwd, sid, (state) => {
+      state.planMode = on
+    }).catch(() => {
+      /* best effort — the in-memory flag is authoritative */
+    })
+  }
 
   // ------------------------------------------------------------------ flag
   // `pi --adx-auto "goal: point 1, point 2, ..."` runs the whole pipeline
@@ -113,51 +127,19 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // the full build-verify pipeline (no review); in interactive mode the user
   // picks the pipeline/workspace via a picker.
   pi.registerTool(
-    createFlowPlanDoneTool(async () => {
-      const c = ctx
-      if (!c) return
-      if (autoMode) {
-        exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-        c.ui.notify('adx: auto mode — planning complete, launching build-verify (no review)', 'info')
-        await executor.launch('build-verify', c, 'auto=true skip_review=true')
-        return
-      }
-      // Interactive mode: pick the next step (pipeline + workspace).
-      const mode = await c.ui.select('adx: planning complete — how to proceed?', [
-        'Build + verify (full pipeline)',
-        'Build (simple)',
-        'Choose workspace',
-      ])
-      if (mode === undefined) {
-        c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
-        return
-      }
-      let workflow = mode.startsWith('Build + verify') ? 'build-verify' : 'build'
-      let args = workflow === 'build-verify' ? withConfigDefaults('') : ''
-      if (mode === 'Choose workspace') {
-        const loc = await c.ui.select('adx: where to work?', [
-          'Work in current workspace',
-          'Start a new workspace (worktree)',
-        ])
-        if (loc === undefined) {
-          c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
-          return
-        }
-        const which = await c.ui.select('adx: which pipeline?', [
-          'Build + verify (full pipeline)',
-          'Build (simple)',
-        ])
-        if (which === undefined) {
-          c.ui.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
-          return
-        }
-        workflow = which.startsWith('Build + verify') ? 'build-verify' : 'build'
-        const locArg = `worklocation=${loc.startsWith('Work in current') ? 'current' : 'new'}`
-        args = workflow === 'build-verify' ? withConfigDefaults(locArg) : locArg
-      }
-      exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      c.ui.notify(`adx: launching ${workflow === 'build-verify' ? 'build-verify' : 'build'}${args ? ` (${args})` : ''}`, 'info')
-      await executor.launch(workflow, c, args)
+    createFlowPlanDoneTool({
+      autoMode: () => autoMode,
+      launch: (workflow, args) => {
+        const c = ctx
+        if (!c) return Promise.resolve()
+        return executor.launch(workflow, c, args)
+      },
+      withConfigDefaults,
+      exitPlanMode: () => {
+        const c = ctx
+        if (c) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      },
+      notify: (m, l) => ctx?.ui.notify(m, l ?? 'info'),
     }),
   )
 
@@ -175,6 +157,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     // Auto mode is unattended: no interactive question tool.
     if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
     pi.setActiveTools(tools)
+    persistPlanMode(true)
     showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-build to start')
     notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta.', 'info')
   }
@@ -184,6 +167,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     planMode = false
     pi.setActiveTools(getBuildModeTools(toolsBeforePlanMode ?? pi.getActiveTools()))
     toolsBeforePlanMode = undefined
+    persistPlanMode(false)
     showBadge(undefined)
     notify('adx: plan mode OFF (build mode).', 'info')
   }
@@ -351,12 +335,14 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // ------------------------------------------------------------------ events
   pi.on('session_start', async (_event, c) => {
     ctx = c
+    sessionId = c.sessionManager.getSessionId()
     // First run: give the user a ready-to-edit config file with the defaults.
     const created = ensureUserConfig()
     if (created) c.ui.notify(`adx: created default config at ${created} (edit to customize)`, 'info')
     config = loadConfig(c.cwd)
-    // Restore any persisted run (e.g. after a pi restart)
-    const state = await loadState(c.cwd)
+    // Restore this session's persisted state (per-session file: resuming a
+    // session brings back its plan/run; a new session starts fresh).
+    const state = await loadState(c.cwd, sessionId)
     if (state.execution && state.execution.status !== 'done') {
       c.ui.notify(`adx: restoring workflow "${state.execution.workflowName}" (status: ${state.execution.status})`, 'info')
       await executor.restore(state, c)
@@ -369,6 +355,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     } else if (config.defaultPlanMode === true) {
       // Config: start every session in plan mode (user-driven hand-off).
       enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    } else if (state.planMode === true) {
+      // The session was stopped mid-plan: restore plan mode so the user can
+      // pick up the unfinished plan (criteria are already in the state file).
+      enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      c.ui.notify('adx: plan mode restored (unfinished plan from last stop — continue with flow_meta, then /adx-build)', 'info')
     }
   })
 

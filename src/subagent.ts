@@ -120,6 +120,9 @@ export interface SpawnOptions {
   timeoutMs?: number
   /** Resume an existing child session (never-stop). */
   resume?: { sessionId: string; message: string }
+  /** Parent's adx state file — the child's flow_meta updates must land in the
+   * PARENT's per-session state, so it is passed through ADX_FLOW_STATE. */
+  statePath?: string
 }
 
 // ============================================================================
@@ -208,7 +211,11 @@ export function spawnFlowAgent(
     try {
       child = spawn(piBin ?? 'pi', args, {
         cwd: opts.cwd,
-        env: { ...process.env, ADX_CHILD: '1' },
+        env: {
+          ...process.env,
+          ADX_CHILD: '1',
+          ...(opts.statePath ? { ADX_FLOW_STATE: opts.statePath } : {}),
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
         // detached → child is a process-group leader; the timeout kills the
         // whole group (pi -p may spawn its own helpers).

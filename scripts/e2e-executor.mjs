@@ -25,7 +25,7 @@ const scratchRepo = join(scratch, 'repo')
 mkdirSync(scratchRepo, { recursive: true })
 writeFileSync(join(scratchRepo, 'index.js'), 'export const x = 1\n')
 
-const statePath = join(scratchRepo, '.pi', 'adx-flow', 'state.json')
+const statePath = join(scratchRepo, '.pi', 'adx-flow', 'state', 'e2e-session.json')
 const readState = () => JSON.parse(readFileSync(statePath, 'utf8'))
 const stateDir = join(scratchRepo, '.pi', 'adx-flow')
 
@@ -38,6 +38,10 @@ let widgetRefreshes = 0
 function fakeCtx() {
   return {
     cwd: scratchRepo,
+    // Per-session state: the executor keys the state file by this session id.
+    sessionManager: { getSessionId: () => 'e2e-session' },
+    // Real ExtensionContext always exposes hasUI (true in TUI/RPC modes).
+    hasUI: true,
     ui: {
       notify: (msg, level) => notifications.push(`${level ?? 'info'}: ${msg}`),
       select: async (title, options) => {
@@ -98,6 +102,7 @@ function applyVerifierEffect() {
 // verify spawn fails ("child stopped") so the executor's never-stop resume
 // path is exercised; everything else succeeds and applies its store effects.
 const spawnCalls = []
+const spawnOpts = []
 let progressResetBeforeReview = false
 let verifierWroteProgress = false
 
@@ -122,8 +127,9 @@ function applyReviewerEffect() {
   )
 }
 
-const fakeSpawn = async (agent, task) => {
+const fakeSpawn = async (agent, task, opts) => {
   spawnCalls.push(agent)
+  spawnOpts.push(opts)
   if (agent === 'adx-verifier' && !firstVerifyFailed) {
     // Child "stopped" before finishing (e.g. context pressure):
     // failure with a run id so the executor can resume it.
@@ -134,8 +140,9 @@ const fakeSpawn = async (agent, task) => {
   if (agent === 'adx-code-reviewer') applyReviewerEffect()
   return { ok: true, runId: 'run-1' }
 }
-const fakeResume = async (agent, runId, message) => {
+const fakeResume = async (agent, runId, message, opts) => {
   spawnCalls.push(`${agent}:resume`)
+  spawnOpts.push(opts)
   // The revived child finishes the job: apply the verifier effect, success.
   if (agent === 'adx-verifier') applyVerifierEffect()
   return { ok: true, runId }
@@ -162,7 +169,10 @@ const executor = new AdxExecutor({
 // flow_meta tool bound to the scratch repo (simulates the LLM calling it)
 const flowMeta = createFlowMetaTool()
 const fm = async (args) => {
-  const res = await flowMeta.execute('t', args, undefined, undefined, { cwd: scratchRepo })
+  const res = await flowMeta.execute('t', args, undefined, undefined, {
+    cwd: scratchRepo,
+    sessionManager: { getSessionId: () => 'e2e-session' },
+  })
   return res.content.map((c) => c.text).join('\n')
 }
 
@@ -203,6 +213,10 @@ check(
 check(
   'resume re-spawns the persisted child session (runId carried over)',
   spawnCalls.includes('adx-verifier:resume'),
+)
+check(
+  'sub-agent children get the parent per-session state file (ADX_FLOW_STATE)',
+  spawnOpts.length > 0 && spawnOpts.every((o) => o?.statePath === statePath),
 )
 check(
   'verify→build re-entry (nudgePrompt) sent with deliverAs: followUp (busy-safe)',

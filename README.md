@@ -148,9 +148,17 @@ shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
 5. The reviewer's findings are dispositioned in `finalize`, then the summary
    with "What to test" is printed.
 
-State lives in `.pi/adx-flow/state.json` (criteria, findings, execution
-state). It survives pi restarts — `session_start` restores a running run, and
-`/adx-resume` continues a blocked one.
+State lives **per pi session** in `.pi/adx-flow/state/<sessionId>.json`
+(criteria, findings, execution state, plan-mode flag) — each session has its
+own plan, and resuming a session restores exactly that session's plan/run.
+A new session starts fresh. On the first per-session load, an in-flight run
+still in the legacy shared `.pi/adx-flow/state.json` (status ≠ done) is
+adopted into the new session's file once, so pre-existing runs keep working.
+Flow sub-agents (verifier / code reviewer) write to the *parent's* state file
+(passed via the `ADX_FLOW_STATE` env var) so their `flow_meta` updates land
+in the driving session's store. It survives pi restarts — `session_start`
+restores the resumed session's running run (and its plan mode if the session
+stopped mid-plan), and `/adx-resume` continues a blocked one.
 
 ## Configuration
 
