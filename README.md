@@ -1,10 +1,10 @@
 # pi-adx-workflow
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![pi-coding-agent](https://img.shields.io/badge/pi-coding-agent-%E2%89%A51.5-blueviolet.svg)](https://github.com/badri/pi)
+[![pi-coding-agent](https://img.shields.io/badge/pi-coding-agent-%E2%89%A51.5-blueviolet.svg)](https://github.com/earendil-works/pi)
 
 **plan → build/verify → review → summarize** workflow for
-[pi-coding-agent](https://github.com/badri/pi), built as a pi extension with
+[pi-coding-agent](https://github.com/earendil-works/pi), built as a pi extension with
 **in-house sub-agent propagation**: flow children (verifier / code reviewer)
 run as isolated `pi -p` child processes — no pi-subagents dependency.
 
@@ -60,7 +60,7 @@ per the pi package conventions).
 
 ## Install
 
-Recommended: install as a [pi package](https://github.com/badri/pi) from git:
+Recommended: install as a [pi package](https://github.com/earendil-works/pi) from git:
 
 ```sh
 pi install git:github.com/mossaab/pi-adx-workflow
