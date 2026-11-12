@@ -16,8 +16,7 @@ import { join } from 'node:path'
 import type { ExtensionContext } from '@earendil-works/pi-coding-agent'
 import { stateFileFor, type FlowState } from './store.js'
 
-const WIDGET_KEY = 'adx-flow'
-const STATUS_KEY = 'adx-flow'
+const ADX_KEY = 'adx-flow' // single shared key (widget + status line) — was two identical constants
 
 /** Current mode badge shown in the footer (set by the extension on mode changes). */
 let modeBadge: string | undefined
@@ -98,8 +97,8 @@ export function refreshFlowWidget(ctx: ExtensionContext, sessionId?: string): vo
   const ui = ctx.ui
 
   if (!state || (!state.execution && Object.keys(state.metadata).length === 0)) {
-    ui.setWidget(WIDGET_KEY, undefined)
-    ui.setStatus(STATUS_KEY, modeBadge)
+    ui.setWidget(ADX_KEY, undefined)
+    ui.setStatus(ADX_KEY, modeBadge)
     return
   }
 
@@ -150,7 +149,7 @@ export function refreshFlowWidget(ctx: ExtensionContext, sessionId?: string): vo
     )
   }
 
-  ui.setWidget(WIDGET_KEY, lines)
+  ui.setWidget(ADX_KEY, lines)
 
   // Footer status line (compact)
   if (state.execution) {
@@ -159,11 +158,11 @@ export function refreshFlowWidget(ctx: ExtensionContext, sessionId?: string): vo
       state.execution.status === 'done'
         ? `✅ adx: ${state.execution.workflowName} done`
         : `adx: ${state.execution.workflowName} · ${state.execution.currentStep} · ${passed}/${criteria.length || 0} criteria`
-    ui.setStatus(STATUS_KEY, footer)
+    ui.setStatus(ADX_KEY, footer)
   } else if (modeBadge) {
-    ui.setStatus(STATUS_KEY, modeBadge)
+    ui.setStatus(ADX_KEY, modeBadge)
   } else {
-    ui.setStatus(STATUS_KEY, undefined)
+    ui.setStatus(ADX_KEY, undefined)
   }
 }
 
@@ -179,18 +178,18 @@ export function setModeBadge(ctx: ExtensionContext, badge: string | undefined, s
   const active =
     state?.execution != null && state.execution.status !== 'done'
   if (badge === undefined) {
-    if (!active) ctx.ui.setStatus(STATUS_KEY, undefined)
+    if (!active) ctx.ui.setStatus(ADX_KEY, undefined)
     return
   }
-  if (!active) ctx.ui.setStatus(STATUS_KEY, badge)
+  if (!active) ctx.ui.setStatus(ADX_KEY, badge)
 }
 
 /** Clear the widget + status (e.g. on /adx-cancel). */
 export function clearFlowWidget(ctx: ExtensionContext, sessionId?: string): void {
   void sessionId // widget keys are TUI-scoped; parameter kept for call-site symmetry
   modeBadge = undefined
-  ctx.ui.setWidget(WIDGET_KEY, undefined)
-  ctx.ui.setStatus(STATUS_KEY, undefined)
+  ctx.ui.setWidget(ADX_KEY, undefined)
+  ctx.ui.setStatus(ADX_KEY, undefined)
 }
 
 // ============================================================================
@@ -237,7 +236,7 @@ export function setSubAgentActivity(
     110,
   )
 
-  ui.setWidget(WIDGET_KEY, (tui, theme) => {
+  ui.setWidget(ADX_KEY, (tui, theme) => {
     const t = theme ?? PLAIN_THEME
     let frame = 0
     let disposed = false
@@ -310,7 +309,7 @@ export function setSubAgentActivity(
   })
 
   ui.setStatus(
-    STATUS_KEY,
+    ADX_KEY,
     `adx: ${activity.agent} · "${activity.step}" running…`,
   )
 }

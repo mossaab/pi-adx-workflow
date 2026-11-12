@@ -328,6 +328,14 @@ Four workflows are bundled:
   `{{pendingCount}}`, `{{criteriaList}}`, `{{modifiedFiles}}`,
   `{{stepOutput.<key>}}` (incl. `content`, `stdout`, `stderr`, `exitCode`),
   `{{params}}` / individual launch parameters.
+- **Shell trust boundary**: `shell` step commands run via `sh -c`, and
+  `{{params.*}}` / `{{workdir}}` are interpolated **verbatim (unquoted)**.
+  Launch parameters are trusted shell input: a value like
+  `message="a; rm -rf ~"` is executed as shell code, and word-splitting
+  applies (a param `args="a b"` becomes two words). Quote values yourself when
+  composing commands from params. This is a deliberate trust assumption,
+  not a bug — workflow JSON and launch args are authored by the user running
+  the workflow.
 - **Semantics**: `settings.maxIterations` caps the whole run (default 50);
   no matching transition ⇒ `$blocked`; agent steps re-enter with
   `nudgePrompt` when their transition condition is unmet; state is persisted

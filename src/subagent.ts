@@ -38,7 +38,7 @@ import { fileURLToPath } from 'node:url'
 // ============================================================================
 // Agent definitions
 // ============================================================================
-const VERIFIER_PROMPT = `You are a code reviewer performing independent verification.
+const VERIFIER_PROMPT = `You are an independent acceptance-criteria verifier.
 You will be given:
 - A task summary
 - Criteria to verify (with status markers)

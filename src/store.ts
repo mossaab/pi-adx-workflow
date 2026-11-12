@@ -137,7 +137,13 @@ export function stateFileFor(cwd: string, sessionId?: string): string {
   if (process.env.ADX_CHILD === '1') {
     return process.env.ADX_FLOW_STATE ?? join(cwd, STATE_DIR, 'state.json')
   }
-  if (sessionId) return join(cwd, STATE_DIR, 'state', `${sessionId}.json`)
+  // Sanitize the id before it reaches a file path (pi session ids are UUIDs
+  // today; a future id containing '/' or other path characters must not be
+  // able to escape the state directory).
+  if (sessionId) {
+    const safe = sessionId.replace(/[^A-Za-z0-9_-]/g, '_')
+    return join(cwd, STATE_DIR, 'state', `${safe}.json`)
+  }
   return join(cwd, STATE_DIR, 'state.json')
 }
 
@@ -145,11 +151,74 @@ function legacyStatePath(cwd: string): string {
   return join(cwd, STATE_DIR, 'state.json')
 }
 
-async function readRaw(path: string): Promise<Partial<FlowState> | undefined> {
+let corruptNotified = false
+
+/**
+ * Optional sink for state-file warnings (corrupt reset, version mismatch).
+ * The store is a pure module with no UI access — index.ts registers a hook
+ * that forwards warnings to the TUI, so a state reset is visible, not just
+ * a console.warn.
+ */
+let stateWarning: ((msg: string) => void) | undefined
+export function onStateWarning(fn: (msg: string) => void): void {
+  stateWarning = fn
+}
+function warnState(msg: string): void {
+  stateWarning?.(msg)
+  console.warn(msg)
+}
+
+async function readRaw(
+  path: string,
+  opts?: { locked?: boolean },
+): Promise<Partial<FlowState> | undefined> {
+  let raw: string
   try {
-    return JSON.parse(await readFile(path, 'utf8')) as Partial<FlowState>
+    raw = await readFile(path, 'utf8')
   } catch {
-    return undefined
+    return undefined // file absent — a fresh state is expected
+  }
+  try {
+    return JSON.parse(raw) as Partial<FlowState>
+  } catch {
+    // Corrupt file (torn write, manual edit): preserve it as a traceable
+    // artifact instead of silently losing the plan, and start fresh.
+    const recover = async (): Promise<Partial<FlowState> | undefined> => {
+      // Re-read first: a concurrent writer's atomic tmp+rename may have
+      // already replaced the corrupt file while we were parsing it.
+      let current: string
+      try {
+        current = await readFile(path, 'utf8')
+      } catch {
+        return undefined // vanished in the meantime
+      }
+      try {
+        return JSON.parse(current) as Partial<FlowState>
+      } catch {
+        const corrupt = `${path}.corrupt-${Date.now()}`
+        await rename(path, corrupt).catch(() => undefined)
+        if (!corruptNotified) {
+          corruptNotified = true
+          warnState(
+            `adx-flow: state file "${path}" was unreadable — preserved as "${corrupt}" and reset to empty state`,
+          )
+        }
+        return undefined
+      }
+    }
+    // If we don't already hold this file's lock, take it so the recovery
+    // rename is ordered with concurrent writers' atomic renames (a writer
+    // can no longer have its fresh good file moved into .corrupt).
+    if (opts?.locked) return recover()
+    let recovered: Partial<FlowState> | undefined
+    try {
+      await withFileLock(`${path}.lock`, async () => {
+        recovered = await recover()
+      })
+    } catch {
+      recovered = await recover() // lock unavailable — best effort
+    }
+    return recovered
   }
 }
 
@@ -164,28 +233,45 @@ function normalizeState(parsed: Partial<FlowState> | undefined): FlowState {
 
 /** One-time legacy migration: adopt an in-flight shared run into a session file. */
 async function adoptLegacy(cwd: string, sessionId: string): Promise<FlowState | undefined> {
-  const legacy = (await readRaw(legacyStatePath(cwd))) as FlowState | undefined
+  const legacyPath = legacyStatePath(cwd)
+  let legacy: FlowState | undefined
+  // Read → check → mark → write the shared legacy file inside ONE lock
+  // acquisition: the migratedTo check and the write-back must be atomic
+  // together, otherwise two sessions in the same cwd can both read the same
+  // un-adopted in-flight run and both adopt it (TOCTOU).
+  await withFileLock(`${legacyPath}.lock`, async () => {
+    legacy = (await readRaw(legacyPath, { locked: true })) as FlowState | undefined
+    if (!legacy?.execution || legacy.execution.status === 'done') return
+    if (legacy.execution.migratedTo) return // already adopted by another session
+    legacy.execution.migratedTo = sessionId
+    const tmp = `${legacyPath}.tmp`
+    await writeFile(tmp, JSON.stringify(legacy, null, 2), 'utf8')
+    await rename(tmp, legacyPath)
+  })
   if (!legacy?.execution || legacy.execution.status === 'done') return undefined
-  if (legacy.execution.migratedTo) return undefined // already adopted by another session
-  legacy.execution.migratedTo = sessionId
+  if (legacy.execution.migratedTo !== sessionId) return undefined // someone else adopted it
+  // Persist the adopted run into this session's own state file (per-session —
+  // no cross-process race, which is why it stays outside the legacy lock).
   const adopted = normalizeState(legacy)
   await saveState(cwd, adopted, sessionId)
-  // Mark the shared legacy file as adopted so no other session re-adopts it
-  // (serialized through the same write chain, atomic like saveState).
-  const run = saveChain.then(async () => {
-    const path = legacyStatePath(cwd)
-    const tmp = `${path}.tmp`
-    await writeFile(tmp, JSON.stringify(legacy, null, 2), 'utf8')
-    await rename(tmp, path)
-  })
-  saveChain = run.catch(() => undefined)
-  await run
   return adopted
 }
 
+let versionNotified = false
+
 export async function loadState(cwd: string, sessionId?: string): Promise<FlowState> {
   const parsed = await readRaw(stateFileFor(cwd, sessionId))
-  if (parsed !== undefined) return normalizeState(parsed)
+  if (parsed !== undefined) {
+    // Format guard: no migration path yet — warn once when a file carries an
+    // unknown version so a future format change is diagnosable, not silent.
+    if (parsed.version !== undefined && parsed.version !== 1 && !versionNotified) {
+      versionNotified = true
+      warnState(
+        `adx-flow: state file version ${String(parsed.version)} differs from the supported version 1 — loading without migration`,
+      )
+    }
+    return normalizeState(parsed)
+  }
   // New per-session file: try to adopt a legacy in-flight run (shared state.json).
   if (sessionId && process.env.ADX_CHILD !== '1') {
     const adopted = await adoptLegacy(cwd, sessionId)
@@ -210,14 +296,8 @@ const LOCK_STALE_MS = 15_000
 const LOCK_TIMEOUT_MS = 10_000
 const LOCK_POLL_MS = 50
 
-async function withStateLock(
-  cwd: string,
-  sessionId: string | undefined,
-  fn: () => Promise<void>,
-): Promise<void> {
-  const path = stateFileFor(cwd, sessionId)
-  await mkdir(dirname(path), { recursive: true })
-  const lockPath = `${path}.lock`
+async function withFileLock(lockPath: string, fn: () => Promise<void>): Promise<void> {
+  await mkdir(dirname(lockPath), { recursive: true })
   const deadline = Date.now() + LOCK_TIMEOUT_MS
   for (;;) {
     try {
@@ -245,6 +325,14 @@ async function withStateLock(
       await new Promise((r) => setTimeout(r, LOCK_POLL_MS))
     }
   }
+}
+
+async function withStateLock(
+  cwd: string,
+  sessionId: string | undefined,
+  fn: () => Promise<void>,
+): Promise<void> {
+  await withFileLock(`${stateFileFor(cwd, sessionId)}.lock`, fn)
 }
 
 async function writeAtomic(
@@ -280,7 +368,7 @@ export function mutateState(
 ): Promise<void> {
   const run = saveChain.then(() =>
     withStateLock(cwd, sessionId, async () => {
-      const state = normalizeState(await readRaw(stateFileFor(cwd, sessionId)))
+      const state = normalizeState(await readRaw(stateFileFor(cwd, sessionId), { locked: true }))
       await mutate(state)
       await writeAtomic(cwd, state, sessionId)
     }),
@@ -306,8 +394,11 @@ export function metaAdd(
   status?: string,
 ): MetaEntry {
   const current = state.metadata[key] ?? []
+  // Highest existing numeric id + 1 (not length + 1) so removed items' ids are
+  // never reused — references in nudges/reports stay unambiguous.
+  const nextId = Math.max(0, ...current.map((e) => Number(e.id) || 0)) + 1
   const entry: MetaEntry = {
-    id: (current.length + 1).toString(),
+    id: String(nextId),
     description,
     status: status || 'pending',
   }

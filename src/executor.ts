@@ -119,6 +119,8 @@ export class AdxExecutor {
   private autoContinueCount = 0
   /** Cached project size for {{projectLines}} / {{projectFileCount}} (refreshed on step entry). */
   private projectStatsCache: { lines: number; files: number } | undefined
+  /** Last loaded FlowState (template context source: criteria list, counts). */
+  private _lastState: FlowState | undefined
 
   constructor(deps: ExecutorDeps) {
     this.deps = deps
@@ -625,29 +627,7 @@ export class AdxExecutor {
     }
 
     const state = await loadState(this.cwd, this.sessionId)
-    for (let i = 0; i < step.transitions.length; i++) {
-      const t = step.transitions[i]!
-      if (this.matchesCondition(t.when, outcome, state)) {
-        this.run!.lastNudgeReason =
-          t.when.type === 'always' ? this.unmetGateReason(step, state) : undefined
-        this.run.lastStepOutput = outcome.output
-        this.run.lastStepResult = outcome.result
-        this.run.updatedAt = new Date().toISOString()
-        if (t.goto === TERMINAL_DONE) {
-          await this.persist()
-          await this.finish('done')
-          return
-        }
-        if (t.goto === TERMINAL_BLOCKED) {
-          await this.persist()
-          await this.finish('blocked')
-          return
-        }
-        await this.persist()
-        await this.enterStep(t.goto)
-        return
-      }
-    }
+    if (await this.runTransitions(step, outcome, state)) return
 
     // Condition unmet → nudge re-entry
     const nudge = step.nudgePrompt
@@ -713,34 +693,50 @@ export class AdxExecutor {
   }
 
   // ------------------------------------------------------------------ transitions
+  /**
+   * Iterate a step's ordered transitions (first match wins), performing the
+   * shared bookkeeping and goto (incl. the terminal $done / $blocked). Returns
+   * true when a transition matched, so callers can apply their own no-match
+   * behavior: onStepDone nudges a re-entry, advance blocks the run.
+   */
+  private async runTransitions(
+    step: WorkflowStep,
+    outcome: StepOutcome,
+    state: FlowState,
+  ): Promise<boolean> {
+    const run = this.run
+    if (!run || !this.cwd) return false
+    for (let i = 0; i < step.transitions.length; i++) {
+      const t = step.transitions[i]!
+      if (!this.matchesCondition(t.when, outcome, state)) continue
+      // Falling through to the "always" fallback means every specific gate
+      // was unmet — remember WHY so the next nudge is actionable.
+      run.lastNudgeReason =
+        t.when.type === 'always' ? this.unmetGateReason(step, state) : undefined
+      run.lastStepOutput = outcome.output
+      run.lastStepResult = outcome.result
+      run.updatedAt = new Date().toISOString()
+      if (t.goto === TERMINAL_DONE) {
+        await this.persist()
+        await this.finish('done')
+        return true
+      }
+      if (t.goto === TERMINAL_BLOCKED) {
+        await this.persist()
+        await this.finish('blocked')
+        return true
+      }
+      await this.persist()
+      await this.enterStep(t.goto)
+      return true
+    }
+    return false
+  }
+
   private async advance(step: WorkflowStep, outcome: StepOutcome): Promise<void> {
     if (!this.run || !this.cwd) return
     const state = await loadState(this.cwd, this.sessionId)
-    for (let i = 0; i < step.transitions.length; i++) {
-      const t = step.transitions[i]!
-      if (this.matchesCondition(t.when, outcome, state)) {
-        // Falling through to the "always" fallback means every specific gate
-        // was unmet — remember WHY so the next nudge is actionable.
-        this.run!.lastNudgeReason =
-          t.when.type === 'always' ? this.unmetGateReason(step, state) : undefined
-        this.run.lastStepOutput = outcome.output
-        this.run.lastStepResult = outcome.result
-        this.run.updatedAt = new Date().toISOString()
-        if (t.goto === TERMINAL_DONE) {
-          await this.persist()
-          await this.finish('done')
-          return
-        }
-        if (t.goto === TERMINAL_BLOCKED) {
-          await this.persist()
-          await this.finish('blocked')
-          return
-        }
-        await this.persist()
-        await this.enterStep(t.goto)
-        return
-      }
-    }
+    if (await this.runTransitions(step, outcome, state)) return
     await this.block(`No matching transition for step "${step.id}" (result: ${outcome.result})`)
   }
 
@@ -882,8 +878,6 @@ export class AdxExecutor {
       params: run?.params ?? {},
     }
   }
-
-  private _lastState: FlowState | undefined
 }
 
 // ============================================================================
@@ -897,12 +891,34 @@ function execInDir(
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve) => {
     exec(command, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      // On non-zero exit, exec surfaces the exit code as `error.code` (number).
-      const rawCode = error ? (error as { code?: string | number }).code : undefined
-      const code: number = error ? (typeof rawCode === 'number' ? rawCode : 1) : 0
+      // Branch on the failure KIND so successExitCodes / failure transitions
+      // can tell the cases apart (previously everything collapsed to 1):
+      //   timeout kill  → -1, missing binary (ENOENT) → -2, real exit → its
+      //   numeric code, other spawn failures → 1. The reason is appended to
+      //   stderr so nudges can act on it.
+      let code: number
+      let reason: string | undefined
+      if (!error) {
+        code = 0
+      } else {
+        const e = error as { code?: string | number; killed?: boolean; message?: string }
+        if (e.killed) {
+          code = -1
+          reason = `timed out after ${timeoutMs}ms`
+        } else if (e.code === 'ENOENT') {
+          code = -2
+          reason = 'command not found (ENOENT)'
+        } else if (typeof e.code === 'number') {
+          code = e.code
+          reason = `exit code ${code}`
+        } else {
+          code = 1
+          reason = e.message ?? `spawn failed (${String(e.code)})`
+        }
+      }
       resolve({
         stdout: stdout ?? '',
-        stderr: stderr ?? '',
+        stderr: reason ? `${stderr ?? ''}\n[adx] shell step failed: ${reason}` : (stderr ?? ''),
         code,
       })
     })

@@ -34,7 +34,7 @@ import {
   getBuildModeTools,
   planModeBashGuard,
 } from './modes.js'
-import { loadState, mutateState } from './store.js'
+import { loadState, mutateState, onStateWarning } from './store.js'
 import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
@@ -99,6 +99,18 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
     widgetEnabled: () => config.showWidget !== false,
     // Filled in once a ctx is available (session_start)
+  })
+
+  /** An executor rejection (e.g. a state-lock timeout) must not surface as an
+   *  unhandled promise rejection in a command handler — notify the user. */
+  const executorFail = (what: string, err: unknown, c: ExtensionContext): void => {
+    c.ui.notify(`adx: ${what} failed — ${err instanceof Error ? err.message : String(err)}`, 'error')
+  }
+
+  // Surface store-level state-file warnings (corrupt reset, version mismatch)
+  // in the TUI — a console.warn alone is easy to miss.
+  onStateWarning((msg) => {
+    ctx?.ui.notify(msg, 'warning')
   })
 
   // ------------------------------------------------------------------ tools
@@ -207,7 +219,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         ? first
         : config.defaultBuildWorkflow === 'build-verify' ? 'build-verify' : 'build'
       const params = hasWorkflowToken ? tokens.slice(1).join(' ') : tokens.join(' ')
-      await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(params) : params)
+      try {
+        await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(params) : params)
+      } catch (err) {
+        executorFail('launch', err, c)
+      }
     },
   })
   pi.registerCommand('adx-build-verify', {
@@ -215,7 +231,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (args, c) => {
       ctx = c
       exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      await executor.launch('build-verify', c, withConfigDefaults(args))
+      try {
+        await executor.launch('build-verify', c, withConfigDefaults(args))
+      } catch (err) {
+        executorFail('launch', err, c)
+      }
     },
   })
 
@@ -231,7 +251,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description: 'Resume a blocked or waiting adx workflow',
     handler: async (_args, c) => {
       ctx = c
-      await executor.resume(c)
+      try {
+        await executor.resume(c)
+      } catch (err) {
+        executorFail('resume', err, c)
+      }
     },
   })
 
@@ -239,7 +263,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description: 'Cancel the current adx workflow run',
     handler: async (_args, c) => {
       ctx = c
-      await executor.cancel(c)
+      try {
+        await executor.cancel(c)
+      } catch (err) {
+        executorFail('cancel', err, c)
+      }
       if (config.showWidget !== false) clearFlowWidget(c, sessionId)
     },
   })

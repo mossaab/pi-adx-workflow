@@ -9,19 +9,17 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { WorkflowDefinition } from './types.js'
 
-/** Bundled workflows live in <extension>/workflows (one up from src/). */
+/**
+ * Bundled workflows live in <extension>/workflows (one up from src/).
+ * `import.meta.url` is available under pi's jiti loader (same precedent as
+ * subagent.ts) — resolve from this module's own location, never from cwd.
+ */
 function bundledWorkflowsDir(): string {
-  // jiti provides __dirname for CJS-transpiled extensions; fall back to cwd.
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const dirname = (typeof __dirname !== 'undefined' ? __dirname : process.cwd()) as string
-    return join(dirname, '..', 'workflows')
-  } catch {
-    return join(process.cwd(), 'workflows')
-  }
+  return join(dirname(fileURLToPath(import.meta.url)), '..', 'workflows')
 }
 
 function readWorkflowFile(path: string): WorkflowDefinition | undefined {

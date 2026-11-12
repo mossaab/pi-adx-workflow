@@ -115,11 +115,28 @@ function collectProjectFiles(dir: string, out: string[], depth: number): void {
 }
 
 /**
+ * Short-TTL cache for the sync project scans. Both functions walk up to
+ * 5,000 files synchronously (blocking the event loop / TUI); the executor
+ * calls projectStats on EVERY agent-step entry and projectHash on every
+ * verifier re-entry. Within TTL_MS the cached value is reused — a sub-agent
+ * run takes far longer than the TTL, so the verifier short-circuit hash is
+ * always computed fresh, while repeated step entries seconds apart stop
+ * re-scanning the whole tree.
+ */
+const SCAN_CACHE_TTL_MS = 5_000
+let statsCache: { at: number; key: string; value: { lines: number; files: number } } | undefined
+let hashCache: { at: number; key: string; value: string | undefined } | undefined
+
+/**
  * Total line count + file count of the project's source files. Drives the
  * {{projectLines}} / {{projectFileCount}} template variables so verify prompts
  * can keep the effort proportional to the project size.
  */
 export function projectStats(workdir: string): { lines: number; files: number } {
+  const now = Date.now()
+  if (statsCache && statsCache.key === workdir && now - statsCache.at < SCAN_CACHE_TTL_MS) {
+    return statsCache.value
+  }
   const files: string[] = []
   collectProjectFiles(workdir, files, 0)
   let lines = 0
@@ -136,7 +153,9 @@ export function projectStats(workdir: string): { lines: number; files: number } 
       /* unreadable file — skip */
     }
   }
-  return { lines, files: count }
+  const value = { lines, files: count }
+  statsCache = { at: now, key: workdir, value }
+  return value
 }
 
 /**
@@ -146,6 +165,11 @@ export function projectStats(workdir: string): { lines: number; files: number } 
  * the walk fails (the short-circuit is then simply not applied).
  */
 export function projectHash(workdir: string): string | undefined {
+  const now = Date.now()
+  if (hashCache && hashCache.key === workdir && now - hashCache.at < SCAN_CACHE_TTL_MS) {
+    return hashCache.value
+  }
+  let value: string | undefined
   try {
     const files: string[] = []
     collectProjectFiles(workdir, files, 0)
@@ -161,10 +185,12 @@ export function projectHash(workdir: string): string | undefined {
       h.update(readFileSync(f))
       count += 1
     }
-    return h.digest('hex')
+    value = h.digest('hex')
   } catch {
-    return undefined
+    value = undefined
   }
+  hashCache = { at: now, key: workdir, value }
+  return value
 }
 
 export function resolveTemplate(template: string, ctx: TemplateContext): string {

@@ -37,7 +37,9 @@ export interface WorkflowDefinition {
   metadata: WorkflowMetadata
   /** ID of the first step to execute */
   entryStep: string
-  settings: WorkflowSettings
+  /** Optional: `maxIterations` safety cap (default 50). Honest as optional —
+   *  workflows without a `settings` block are valid and run with defaults. */
+  settings?: WorkflowSettings
   /** Ordered for display; execution follows transitions, not array order */
   steps: WorkflowStep[]
   /** Condition that must be met before the workflow starts (default: always) */
