@@ -297,7 +297,7 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
       'Signal that planning is complete: every final acceptance criterion has been added with flow_meta (key "criteria"). ' +
       'In auto mode the workflow continues automatically to build; in interactive mode the user is offered a picker ' +
       '(build + verify / build simple / choose workspace / spec only — stop, which exports the criteria as a spec file and launches nothing). ' +
-      'Without a dialog UI (print/json modes) plan mode stays on and the turn ends — start the pipeline with /adx-build or /adx-build-verify. ' +
+      'Without a dialog UI (print/json modes) plan mode stays on and the turn ends — start the pipeline with /adx-run (e.g. /adx-run build-verify). ' +
       'Call it once, after the complete criteria recap is presented.',
     promptSnippet: 'Mark planning complete so the workflow can continue to build',
     promptGuidelines: [
@@ -326,17 +326,17 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
       // The interactive picker needs a dialog-capable UI (TUI/RPC). In
       // print/json modes (ctx.hasUI === false) fall back to a command: plan
       // mode (read-only) stays on and the turn ends — the user starts the
-      // pipeline explicitly with /adx-build or /adx-build-verify.
+      // pipeline explicitly with /adx-run (e.g. /adx-run build-verify).
       if (!ctx.hasUI) {
         deps.notify(
-          'adx: planning complete — no interactive UI; plan mode stays on, run /adx-build or /adx-build-verify to start',
+          'adx: planning complete — no interactive UI; plan mode stays on, run /adx-run build-verify (or /adx-run for the simple build) to start',
           'info',
         )
         return {
           content: [
             {
               type: 'text' as const,
-              text: 'Planning complete (no interactive UI — plan mode stays on; run /adx-build or /adx-build-verify to start).',
+              text: 'Planning complete (no interactive UI — plan mode stays on; run /adx-run build-verify (or /adx-run for the simple build) to start).',
             },
           ],
           details: {},
@@ -347,12 +347,12 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
       }
       // Picker cancelled (user dismissed a prompt): stay in plan mode.
       const cancelled = () => {
-        deps.notify('adx: planning complete — run /adx-build or /adx-build-verify to start', 'info')
+        deps.notify('adx: planning complete — run /adx-run build-verify (or /adx-run for the simple build) to start', 'info')
         return {
           content: [
             {
               type: 'text' as const,
-              text: 'Planning complete (picker cancelled — run /adx-build or /adx-build-verify to start).',
+              text: 'Planning complete (picker cancelled — run /adx-run build-verify (or /adx-run for the simple build) to start).',
             },
           ],
           details: {},

@@ -22,10 +22,10 @@ export interface AdxConfig {
    *  The CLI flag wins when passed. */
   autoMode?: boolean
   /** Default `skip_review=true` when launching the build-verify pipeline
-   *  (picker + /adx-build-verify), unless the caller already set it
+   *  (picker + /adx-run build-verify), unless the caller already set it
    *  (default: false) */
   skipReview?: boolean
-  /** Workflow launched by /adx-build (default: "build") */
+  /** Workflow launched by /adx-run (default: "build") */
   defaultBuildWorkflow?: 'build' | 'build-verify'
 }
 

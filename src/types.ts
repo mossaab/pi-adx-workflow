@@ -117,7 +117,7 @@ export type TransitionCondition =
   | { type: 'step_result'; result: string }
   | { type: 'metadata_all_match'; key: string; field: string; value: string }
   | { type: 'metadata_all_in'; key: string; field: string; values: string[] }
-  /** Matches when the run was launched with `<key>=<value>` (e.g. `/adx-build-verify skip_review=true`) */
+  /** Matches when the run was launched with `<key>=<value>` (e.g. `/adx-run build-verify skip_review=true`) */
   | { type: 'param'; key: string; value: string }
   | { type: 'always' }
 

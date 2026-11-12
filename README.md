@@ -12,7 +12,7 @@ It implements a complete working method:
 
 1. **Plan mode** (read-only) — the planner explores and proposes **acceptance
    criteria** (`flow_meta`, key `criteria`, status `pending`).
-2. **Build mode** — you approve, then `/adx-build` starts the workflow:
+2. **Build mode** — you approve, then `/adx-run` starts the workflow:
    the builder implements and marks criteria `completed`.
 3. **Verify loop** — an isolated **verifier** sub-agent (fresh `pi -p` child
    session) checks each criterion and sets `passed`/`failed`. Failures
@@ -104,19 +104,23 @@ re-create the symlink.
 /adx-plan                    enter plan mode (read-only)
 /adx-spec [path]             enter spec mode (read-only brainstorm/research; writes a spec file, no build)
 /adx-spec SPEC.md            spec mode with a custom spec location (default: .pi/specs/<slug>.md)
-/adx-build-mode              switch to build mode (turn plan/spec mode off, no launch)
-/adx-build                   switch to build mode + launch the simple build workflow (no verify/review)
-/adx-build-verify            switch to build mode + launch the full build-verify workflow
-/adx-build-verify skip_review=true   full workflow minus the code review step
-/adx-build-verify commit=true        pipeline + commit & push at the end (auto-skips the "Commit changes?" picker)
-/adx-build-verify commit=false       pipeline, changes left uncommitted (picker auto-skipped)
-/adx-build-verify commit=true message="feat: ..."   commit phase with an explicit commit message
+/adx-approve                 approve the plan/spec: switch to build mode (turn plan/spec mode off, no launch)
+/adx-run [workflow] [params] switch to build mode + launch a workflow (default: the configured build one)
+/adx-run build-verify        switch to build mode + launch the full build-verify workflow
+/adx-run build-verify skip_review=true   full workflow minus the code review step
+/adx-run build-verify commit=true        pipeline + commit & push at the end (auto-skips the "Commit changes?" picker)
+/adx-run build-verify commit=false       pipeline, changes left uncommitted (picker auto-skipped)
+/adx-run build-verify commit=true message="feat: ..."   commit phase with an explicit commit message
 /adx-status                  show current workflow state
 /adx-resume                  resume a blocked/waiting workflow
 /adx-cancel                  cancel the current run
 /adx-config                  show the effective config ("edit" menu / "set key=value")
 Ctrl+Alt+A                   toggle plan/spec mode (spec mode exits; plan mode toggles)
 ```
+
+Deprecated aliases (kept for compatibility, marked deprecated in the TUI):
+`/adx-build-mode` → `/adx-approve`, `/adx-build` → `/adx-run`,
+`/adx-build-verify` → `/adx-run build-verify`.
 
 ### Auto mode (unattended pipeline)
 
@@ -133,9 +137,9 @@ pi --adx-auto "Add a dark mode toggle: - toggle in settings, - persist to localS
    auto-skipped — in auto mode the work is left uncommitted by default).
 3. **Verify → recap** — the verifier checks the criteria, then the summary
    with "What to test" is printed. The code review step is skipped in auto
-   mode; use `/adx-build-verify` for the full pipeline with review.
+   mode; use `/adx-run build-verify` for the full pipeline with review.
 
-Manual mode (`/adx-plan` + `/adx-build` / `/adx-build-verify`) is unchanged.
+Manual mode (`/adx-plan` + `/adx-approve` / `/adx-run`) is unchanged.
 
 When the planner finishes in interactive mode it calls `flow_plan_done`, which
 shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
@@ -161,7 +165,7 @@ spec writing — **zero coding, zero verification, zero review**.
   choose the location. `spec_write` is called exactly once, at the end.
 - **No hand-off** — after the spec is saved the session simply ends in normal
   build mode; nothing is launched, verified, or reviewed. Exit spec mode early
-  with `/adx-build-mode` or Ctrl+Alt+A (no launch). Spec mode is persisted per
+  with `/adx-approve` or Ctrl+Alt+A (no launch). Spec mode is persisted per
   session and restored on resume (unfinished spec → continue, then call
   `spec_write` once).
 
@@ -175,7 +179,7 @@ saves it to `.pi/specs/<slug>.md`, exits plan mode, and launches nothing.
 2. Ask for a feature: *"Add a dark mode toggle. Use flow_meta to define the
    acceptance criteria."* — the planner explores (read-only) and adds
    criteria. Review them in the widget (or edit with `flow_meta`).
-3. `/adx-build` (quick: `build → summarize`) or `/adx-build-verify`
+3. `/adx-run` (quick: `build → summarize`) or `/adx-run build-verify`
    (full: `work_location → build → verify → code_review → finalize → summarize`).
    The widget tracks step, iteration, and criterion status; the footer shows
    a compact status line.
@@ -235,8 +239,8 @@ You can also manage it from inside pi:
 | `defaultPlanMode` | `false` | Start every pi session in plan mode (no active run to restore) |
 | `showWidget` | `true` | `false` hides the bottom flow/criteria widget entirely |
 | `autoMode` | `false` | Persistent `--adx-auto`: unattended plan → build → verify → recap (the CLI flag still wins when passed) |
-| `skipReview` | `false` | Default `skip_review=true` for the build-verify pipeline (picker + `/adx-build-verify`); an explicit `skip_review=` in the command args wins |
-| `defaultBuildWorkflow` | `"build"` | Which workflow `/adx-build` launches: `"build"` (simple) or `"build-verify"` (full) |
+| `skipReview` | `false` | Default `skip_review=true` for the build-verify pipeline (picker + `/adx-run build-verify`); an explicit `skip_review=` in the command args wins |
+| `defaultBuildWorkflow` | `"build"` | Which workflow `/adx-run` launches: `"build"` (simple) or `"build-verify"` (full) |
 
 ## Never-stop (auto-continue)
 
@@ -339,8 +343,8 @@ Four workflows are bundled:
 
 - `build` — **simple**: `work_location → build → commit? → summarize`. No
   automated verification, no code review; the builder self-checks before
-  marking criteria complete. Launched by `/adx-build`.
-- `build-verify` — **the full pipeline** (default for `/adx-build-verify`):
+  marking criteria complete. Launched by `/adx-run`.
+- `build-verify` — **the full pipeline** (launched with `/adx-run build-verify`):
   `work_location → build → verify → code_review → finalize → commit? →
   summarize`.
 
@@ -359,11 +363,11 @@ adx/<slug>` — with **no merge into the base branch**: the merge stays manual
 (open a PR or `git merge adx/<slug>` later), and the worktree + branch are
 kept in place for follow-up work.
 - `pr-review` — PR review + fixes + squash-merge (requires `gh`), launched
-  with `/adx-build pr-review pr_number=123`.
+  with `/adx-run pr-review pr_number=123`.
 - `commit` — **commit & push**: `check_status → stage → commit → push →
   summarize`. Stages only the session's files (never `git add -A`), commits
   with a clear message, and rebases onto origin if the push is rejected.
-  Launched with `/adx-build commit` (optional `message="..."` param to set
+  Launched with `/adx-run commit` (optional `message="..."` param to set
   the commit message explicitly).
 
 ### Authoring reference (short)

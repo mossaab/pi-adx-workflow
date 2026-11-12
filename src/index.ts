@@ -7,15 +7,18 @@
  * subagent.ts); no pi-subagents dependency.
  *
  * Commands:
- *   /adx-plan          enter plan mode (read-only; planner proposes criteria)
- *   /adx-spec [path]   enter spec mode (read-only brainstorm/research; writes a spec file, no build)
- *   /adx-build-mode    switch to build mode (turn plan/spec mode off; no launch)
- *   /adx-build         switch to build mode + launch the simple build workflow
- *   /adx-build-verify  switch to build mode + launch the full build-verify workflow
- *   /adx-status        show current workflow state
- *   /adx-resume        resume a blocked/waiting workflow
- *   /adx-cancel        cancel the current workflow run
- *   /adx-config        show config / "edit" opens a menu / "set key=value [project]"
+ *   /adx-plan             enter plan mode (read-only; planner proposes criteria)
+ *   /adx-spec [path]      enter spec mode (read-only brainstorm/research; writes a spec file, no build)
+ *   /adx-approve          approve the plan/spec: switch to build mode (no launch)
+ *   /adx-run [workflow]   switch to build mode + launch a workflow (default: the configured build one)
+ *   /adx-status           show current workflow state
+ *   /adx-resume           resume a blocked/waiting workflow
+ *   /adx-cancel           cancel the current workflow run
+ *   /adx-config           show config / "edit" opens a menu / "set key=value [project]"
+ * Deprecated aliases (kept for compatibility):
+ *   /adx-build-mode       → /adx-approve
+ *   /adx-build            → /adx-run
+ *   /adx-build-verify     → /adx-run build-verify
  * Flag:
  *   --adx-auto         unattended pipeline: plan → build → verify → recap without approvals
  * Shortcut:
@@ -24,6 +27,7 @@
 
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
 import { createFlowMetaTool, createFlowStepDoneTool, createFlowPlanDoneTool, createSpecWriteTool } from './tools.js'
@@ -226,8 +230,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
     pi.setActiveTools(tools)
     persistPlanMode(true)
-    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-build-mode to exit · /adx-build to start')
-    notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta. Exit: /adx-build-mode or Ctrl+Alt+A.', 'info')
+    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-approve to exit · /adx-run to start')
+    notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta. Exit: /adx-approve or Ctrl+Alt+A.', 'info')
   }
 
   function exitPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
@@ -252,9 +256,9 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     pi.setActiveTools(getSpecModeTools(pi.getActiveTools()))
     specPath = pathArg || undefined
     persistSpecMode(true, specPath)
-    showBadge(`adx: [SPEC] read-only · /adx-build-mode to exit${specPath ? ` · spec: ${specPath}` : ''}`)
+    showBadge(`adx: [SPEC] read-only · /adx-approve to exit${specPath ? ` · spec: ${specPath}` : ''}`)
     notify(
-      'adx: spec mode ON (read-only brainstorm/research). Explore, research, then call spec_write ONCE with the full spec markdown. Exit: /adx-build-mode or Ctrl+Alt+A.',
+      'adx: spec mode ON (read-only brainstorm/research). Explore, research, then call spec_write ONCE with the full spec markdown. Exit: /adx-approve or Ctrl+Alt+A.',
       'info',
     )
   }
@@ -292,7 +296,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     handler: async (args, c) => {
       ctx = c
       if (specMode) {
-        c.ui.notify('adx: already in spec mode (exit with /adx-build-mode or Ctrl+Alt+A)', 'info')
+        c.ui.notify('adx: already in spec mode (exit with /adx-approve or Ctrl+Alt+A)', 'info')
         return
       }
       const raw = (args ?? '').trim()
@@ -314,48 +318,60 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
   })
 
+  // Approve the plan/spec: turn the plan/spec read-only mode off (build mode)
+  // without launching a workflow. The deprecated /adx-build-mode alias shares
+  // this exact handler so both stay in lockstep.
+  const approveHandler = async (_args: string, c: ExtensionCommandContext) => {
+    ctx = c
+    if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    else c.ui.notify('adx: already in build mode (plan mode is off)', 'info')
+  }
+  pi.registerCommand('adx-approve', {
+    description: 'Approve the plan/spec: switch to build mode (turn plan/spec mode off) without launching a workflow',
+    handler: approveHandler,
+  })
   pi.registerCommand('adx-build-mode', {
-    description: 'Switch to build mode (turn plan/spec mode off) without launching a workflow',
-    handler: async (_args, c) => {
-      ctx = c
-      if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      else c.ui.notify('adx: already in build mode (plan mode is off)', 'info')
-    },
+    description: '(deprecated — use /adx-approve) Switch to build mode (turn plan/spec mode off) without launching a workflow',
+    handler: approveHandler,
   })
 
-  pi.registerCommand('adx-build', {
-    description:
-      'Switch to build mode and launch a workflow (default: the configured build one). Pass a workflow id as the first token, e.g. /adx-build pr-review pr_number=123',
-    handler: async (args, c) => {
-      ctx = c
-      exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
-      // First bare token (no '=') names the workflow; the rest are key=value params.
-      const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
-      const first = tokens[0]
-      const hasWorkflowToken = first !== undefined && !first.includes('=')
-      const workflow = hasWorkflowToken
+  // Generic launcher: switch to build mode and launch a workflow — the
+  // configured default one, or an explicit workflow id as the first token.
+  // The deprecated /adx-build alias shares this exact handler.
+  const runHandler = async (args: string, c: ExtensionCommandContext) => {
+    ctx = c
+    exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
+    // First bare token (no '=') names the workflow; the rest are key=value params.
+    const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
+    const first = tokens[0]
+    const hasWorkflowToken = first !== undefined && !first.includes('=')
+    const workflow = hasWorkflowToken
         ? first
         : config.defaultBuildWorkflow === 'build-verify' ? 'build-verify' : 'build'
-      const params = hasWorkflowToken ? tokens.slice(1).join(' ') : tokens.join(' ')
-      try {
-        await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(params) : params)
-      } catch (err) {
-        executorFail('launch', err, c)
-      }
-    },
+    const params = hasWorkflowToken ? tokens.slice(1).join(' ') : tokens.join(' ')
+    try {
+      await executor.launch(workflow, c, workflow === 'build-verify' ? withConfigDefaults(params) : params)
+    } catch (err) {
+      executorFail('launch', err, c)
+    }
+  }
+  pi.registerCommand('adx-run', {
+    description:
+      'Switch to build mode and launch a workflow (default: the configured build one). Pass a workflow id as the first token, e.g. /adx-run pr-review pr_number=123',
+    handler: runHandler,
   })
+  pi.registerCommand('adx-build', {
+    description: '(deprecated — use /adx-run) Switch to build mode and launch a workflow',
+    handler: runHandler,
+  })
+  // Deprecated: /adx-run build-verify is the canonical form — this alias
+  // delegates to the generic launcher with "build-verify" prefixed, so the
+  // build-verify launch path (config defaults included) lives in one place.
   pi.registerCommand('adx-build-verify', {
-    description: 'Switch to build mode and launch the full build-verify workflow (verify + code review; add skip_review=true to skip the review)',
-    handler: async (args, c) => {
-      ctx = c
-      exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
-      try {
-        await executor.launch('build-verify', c, withConfigDefaults(args))
-      } catch (err) {
-        executorFail('launch', err, c)
-      }
-    },
+    description: '(deprecated — use /adx-run build-verify) Switch to build mode and launch the full build-verify workflow (verify + code review; add skip_review=true to skip the review)',
+    handler: (args: string, c: ExtensionCommandContext) =>
+      runHandler('build-verify' + (args?.trim() ? ' ' + args.trim() : ''), c),
   })
 
   pi.registerCommand('adx-status', {
@@ -527,7 +543,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       // The session was stopped mid-plan: restore plan mode so the user can
       // pick up the unfinished plan (criteria are already in the state file).
       enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      c.ui.notify('adx: plan mode restored (unfinished plan from last stop — continue with flow_meta, then /adx-build)', 'info')
+      c.ui.notify('adx: plan mode restored (unfinished plan from last stop — continue with flow_meta, then /adx-run)', 'info')
     } else if (state.specMode === true) {
       // The session was stopped mid-spec: restore spec mode (the spec file is
       // still pending — continue, then call spec_write once).

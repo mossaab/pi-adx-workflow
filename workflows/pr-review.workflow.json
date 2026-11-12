@@ -2,7 +2,7 @@
   "metadata": {
     "id": "pr-review",
     "name": "PR Review",
-    "description": "PR review + fix + squash-merge workflow. Requires the `gh` CLI authenticated. Launch with: /adx-build pr-review pr_number=123",
+    "description": "PR review + fix + squash-merge workflow. Requires the `gh` CLI authenticated. Launch with: /adx-run pr-review pr_number=123",
     "version": "1.0.0",
     "color": "#10b981",
     "parameters": [

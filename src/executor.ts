@@ -281,7 +281,7 @@ export class AdxExecutor {
     if (!this.run || !this.workflow) {
       const state = await loadState(ctx.cwd, this.sessionId)
       if (!state.execution) {
-        this.deps.notify('adx: no workflow run (start with /adx-build)', 'info')
+        this.deps.notify('adx: no workflow run (start with /adx-run)', 'info')
         return
       }
       this.run = state.execution

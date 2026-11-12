@@ -26,7 +26,7 @@ export interface TemplateContext {
   /** Number of the project's source files (for proportional verification). */
   projectFileCount: number
   stepOutput: Record<string, string>
-  /** User-supplied parameters from workflow launch (e.g. /adx-build args) */
+  /** User-supplied parameters from workflow launch (e.g. /adx-run args) */
   params: Record<string, string>
 }
 

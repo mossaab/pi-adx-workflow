@@ -2,7 +2,7 @@
   "metadata": {
     "id": "commit",
     "name": "Commit & Push",
-    "description": "Commit and push the current work: check git status, stage only the relevant files (never -A), commit with a clear message, push (rebase onto origin and fix conflicts if the push is rejected). Launch with: /adx-build commit, or /adx-build commit message=\"your message\" to set the commit message explicitly.",
+    "description": "Commit and push the current work: check git status, stage only the relevant files (never -A), commit with a clear message, push (rebase onto origin and fix conflicts if the push is rejected). Launch with: /adx-run commit, or /adx-run commit message=\"your message\" to set the commit message explicitly.",
     "version": "1.0.0",
     "color": "#f59e0b",
     "parameters": [

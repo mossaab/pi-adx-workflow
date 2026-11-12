@@ -2,7 +2,7 @@
   "metadata": {
     "id": "build",
     "name": "Build (simple)",
-    "description": "Simple build: implement the criteria and summarize. No automated verification, no code review. Use /adx-build-verify for the full pipeline.",
+    "description": "Simple build: implement the criteria and summarize. No automated verification, no code review. Use /adx-run build-verify for the full pipeline.",
     "version": "1.0.0",
     "color": "#22c55e",
     "parameters": [
