@@ -538,20 +538,21 @@ export function createSpecWriteTool(deps: SpecWriteDeps) {
           details: {},
         }
       }
+      let written: string
       try {
-        await writeSpecFile(cwd, target, content)
+        written = await writeSpecFile(cwd, target, content)
       } catch (err) {
         const msg = `adx: failed to write spec — ${err instanceof Error ? err.message : String(err)}`
         deps.notify(msg, 'error')
         return { content: [{ type: 'text' as const, text: msg }], details: {} }
       }
-      deps.notify(`adx: spec saved to ${target}`, 'info')
-      deps.onWritten?.(target)
+      deps.notify(`adx: spec saved to ${written}`, 'info')
+      deps.onWritten?.(written)
       return {
         content: [
           {
             type: 'text' as const,
-            text: `Spec saved to ${target}. Spec mode is complete — the session is now in normal build mode (no build launched).`,
+            text: `Spec saved to ${written}. Spec mode is complete — the session is now in normal build mode (no build launched).`,
           },
         ],
         details: {},

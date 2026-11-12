@@ -7,10 +7,17 @@
  * summarize → $done, with persistence and widget refreshes.
  */
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJitiFromPi } from './find-jiti.mjs'
+
+// Hermetic: never inherit the flow-child env. ADX_CHILD=1 + ADX_FLOW_STATE would
+// redirect the store's state-file resolution away from the scratch repo (and leak
+// the test criteria into the parent session's store), breaking the scratch
+// assertions. Strip both so the suite always resolves its own scratch state file.
+delete process.env.ADX_CHILD
+delete process.env.ADX_FLOW_STATE
 
 const createJiti = createJitiFromPi()
 const jiti = createJiti(import.meta.url, { cache: false, interopDefault: true })
@@ -516,6 +523,137 @@ check(
     notifications.some((n) => n.includes('verifier re-run skipped')),
   )
   skipTestMode = false
+}
+
+// ------------------------------------------------------------------ worktree collision (setup_workspace pre-check)
+// A colliding folder AND branch are pre-created; launching with
+// worklocation=new must route to setup_workspace, and the (simulated) agent
+// must pick the next free numeric suffix per the updated step prompt — no
+// overwrites, no git errors.
+{
+  const { execSync } = await import('node:child_process')
+  const scratch2 = mkdtempSync(join(tmpdir(), 'adx-e2e-collision-'))
+  const repo2 = join(scratch2, 'repo')
+  mkdirSync(repo2, { recursive: true })
+  writeFileSync(join(repo2, 'index.js'), 'export const x = 1\n')
+  let gitFailures = 0
+  const git = (args) => {
+    try {
+      return execSync(`git ${args}`, {
+        cwd: repo2,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'e2e',
+          GIT_AUTHOR_EMAIL: 'e2e@e2e.test',
+          GIT_COMMITTER_NAME: 'e2e',
+          GIT_COMMITTER_EMAIL: 'e2e@e2e.test',
+        },
+      }).trim()
+    } catch {
+      gitFailures++
+      return ''
+    }
+  }
+  git('init -q')
+  git('add index.js')
+  git('commit -qm init')
+
+  // Collision targets: the folder and the branch are both already taken.
+  const wtDir = join(scratch2, '.adx-worktrees')
+  mkdirSync(join(wtDir, 'dark-theme'), { recursive: true })
+  writeFileSync(join(wtDir, 'dark-theme', 'marker.txt'), 'do not touch\n')
+  git('branch adx/dark-theme')
+
+  // Isolated harness: fresh scratch repo + session so the main scenario's
+  // state does not leak into this one.
+  const userMessages2 = []
+  const fakePi2 = { sendUserMessage: (m) => userMessages2.push(m) }
+  const ctx2 = {
+    cwd: repo2,
+    sessionManager: { getSessionId: () => 'e2e-collision' },
+    hasUI: true,
+    ui: {
+      notify: () => {},
+      select: async () => undefined,
+      setWidget: () => {},
+      setStatus: () => {},
+      theme: { fg: (_c, t) => t, bold: (t) => t, strikethrough: (t) => t },
+    },
+  }
+  const executor2 = new AdxExecutor({
+    pi: fakePi2,
+    notify: () => {},
+    updateWidget: () => {},
+    spawn: async () => {
+      throw new Error('no sub-agent steps in collision scenario')
+    },
+    resume: async () => {
+      throw new Error('no sub-agent steps in collision scenario')
+    },
+  })
+  const readState2 = () =>
+    JSON.parse(readFileSync(join(repo2, '.pi', 'adx-flow', 'state', 'e2e-collision.json'), 'utf8'))
+
+  await executor2.launch('build-verify', ctx2, 'worklocation=new')
+  check(
+    'worklocation=new routes to setup_workspace (collision pre-check prompt injected)',
+    userMessages2.at(-1)?.includes('Check for name collisions BEFORE creating') &&
+      userMessages2.at(-1)?.includes("git branch --list 'adx/<slug>'"),
+  )
+
+  // Simulate the agent following the step prompt: deterministic
+  // check → numeric suffix → create.
+  const branchTaken = (s) => git(`branch --list "adx/${s}"`) !== ''
+  let slug = 'dark-theme'
+  let n = 2
+  while (existsSync(join(wtDir, slug)) || branchTaken(slug)) {
+    slug = `dark-theme-${n}`
+    n += 1
+  }
+  check('collision pre-check picks the next free suffix (-2)', slug === 'dark-theme-2')
+  git(`worktree add ../.adx-worktrees/${slug} -b adx/${slug} HEAD`)
+
+  // Report the final slug via flow_step_done content, then advance the run.
+  await executor2.onStepDone({ content: `final-slug=${slug}` })
+  check(
+    'setup step reported final slug and advanced to build',
+    readState2().execution?.currentStep === 'build',
+  )
+  check(
+    'reported slug is the suffixed one',
+    readState2().execution?.lastStepOutput?.content === 'final-slug=dark-theme-2',
+  )
+
+  // The collision targets are untouched; the new worktree is registered.
+  check(
+    'colliding folder left untouched',
+    readFileSync(join(wtDir, 'dark-theme', 'marker.txt'), 'utf8') === 'do not touch\n',
+  )
+  check('colliding branch still exists', branchTaken('dark-theme'))
+  check('new worktree folder created', existsSync(join(wtDir, 'dark-theme-2')))
+  check('new worktree registered in git', git('worktree list').includes('dark-theme-2'))
+  check('no git errors propagated', gitFailures === 0)
+}
+
+// ------------------------------------------------------------------ spec uniqueness (no silent overwrite)
+// Two specs written "in the same second" (same generated slug) must produce
+// distinct files; the first one stays intact.
+{
+  const spec = await jiti.import(join(srcDir, 'spec.ts'))
+  const specDir = join(scratchRepo, '.pi', 'specs')
+  const first = join(specDir, 'spec-20250101-000000.md')
+  const p1 = await spec.writeSpecFile(scratchRepo, first, '# spec one\n')
+  const p2 = await spec.writeSpecFile(scratchRepo, first, '# spec two\n')
+  check('2nd same-second spec gets a unique suffix', p1 === first && p2 === join(specDir, 'spec-20250101-000000-2.md'))
+  check(
+    'first spec left intact (no silent overwrite)',
+    readFileSync(p1, 'utf8') === '# spec one\n' && readFileSync(p2, 'utf8') === '# spec two\n',
+  )
+  check(
+    'uniqueSpecPath reports a free path unchanged',
+    spec.uniqueSpecPath(join(specDir, 'spec-20250101-000001.md')) === join(specDir, 'spec-20250101-000001.md'),
+  )
 }
 
 // ------------------------------------------------------------------ report

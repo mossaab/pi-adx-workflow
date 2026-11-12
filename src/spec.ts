@@ -6,8 +6,9 @@
  * workspace itself stays read-only. Default location: .pi/specs/<slug>.md.
  */
 
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path'
 
 import type { MetaEntry } from './store.js'
 
@@ -48,11 +49,29 @@ export function specPathError(cwd: string, rawPath: string): string | undefined 
   return undefined
 }
 
-/** Write the spec file (creating parent directories); returns the absolute path. */
+/**
+ * Never silently overwrite: when `absPath` already exists, append a numeric
+ * suffix (`spec-...-2.md`, `spec-...-3.md`, ...) and return the first free path.
+ */
+export function uniqueSpecPath(absPath: string): string {
+  if (!existsSync(absPath)) return absPath
+  const dir = dirname(absPath)
+  const ext = extname(absPath)
+  const base = basename(absPath, ext)
+  let n = 2
+  for (;;) {
+    const candidate = join(dir, `${base}-${n}${ext}`)
+    if (!existsSync(candidate)) return candidate
+    n += 1
+  }
+}
+
+/** Write the spec file (creating parent directories; unique suffix when the target exists); returns the absolute path actually written. */
 export async function writeSpecFile(cwd: string, absPath: string, content: string): Promise<string> {
-  await mkdir(dirname(absPath), { recursive: true })
-  await writeFile(absPath, content, 'utf8')
-  return absPath
+  const path = uniqueSpecPath(absPath)
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(path, content, 'utf8')
+  return path
 }
 
 /**

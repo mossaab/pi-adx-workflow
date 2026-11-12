@@ -39,7 +39,7 @@ import {
 } from './modes.js'
 import { loadState, mutateState, onStateWarning } from './store.js'
 import { composeSpecMarkdown, defaultSpecPath, specPathError, writeSpecFile } from './spec.js'
-import { resolve as resolvePath } from 'node:path'
+import { relative, resolve as resolvePath } from 'node:path'
 import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
@@ -185,8 +185,10 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         const state = await loadState(c.cwd, sid)
         const criteria = state.metadata['criteria'] ?? []
         const rel = defaultSpecPath(c.cwd)
-        await writeSpecFile(c.cwd, resolvePath(c.cwd, rel), composeSpecMarkdown({ criteria, title: 'Session spec' }))
-        return rel
+        const written = await writeSpecFile(c.cwd, resolvePath(c.cwd, rel), composeSpecMarkdown({ criteria, title: 'Session spec' }))
+        // Display the concise project-relative form (the written path may carry
+        // a collision suffix); the absolute path stays the write source of truth.
+        return relative(c.cwd, written)
       },
       notify: (m, l) => ctx?.ui.notify(m, l ?? 'info'),
     }),
