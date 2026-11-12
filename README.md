@@ -108,6 +108,9 @@ re-create the symlink.
 /adx-build                   switch to build mode + launch the simple build workflow (no verify/review)
 /adx-build-verify            switch to build mode + launch the full build-verify workflow
 /adx-build-verify skip_review=true   full workflow minus the code review step
+/adx-build-verify commit=true        pipeline + commit & push at the end (auto-skips the "Commit changes?" picker)
+/adx-build-verify commit=false       pipeline, changes left uncommitted (picker auto-skipped)
+/adx-build-verify commit=true message="feat: ..."   commit phase with an explicit commit message
 /adx-status                  show current workflow state
 /adx-resume                  resume a blocked/waiting workflow
 /adx-cancel                  cancel the current run
@@ -126,7 +129,8 @@ pi --adx-auto "Add a dark mode toggle: - toggle in settings, - persist to localS
 1. **Plan** — the planner refines the acceptance points you provided into
    final criteria (no questions, no validation step) and adds them to the store.
 2. **Build** — plan mode exits automatically and the build-verify workflow
-   launches (user steps like the work-location picker are auto-skipped).
+   launches (user steps like the work-location and commit pickers are
+   auto-skipped — in auto mode the work is left uncommitted by default).
 3. **Verify → recap** — the verifier checks the criteria, then the summary
    with "What to test" is printed. The code review step is skipped in auto
    mode; use `/adx-build-verify` for the full pipeline with review.
@@ -333,11 +337,27 @@ precedence) and per user in `~/.pi/agent/workflows/`.
 
 Four workflows are bundled:
 
-- `build` — **simple**: `work_location → build → summarize`. No automated
-  verification, no code review; the builder self-checks before marking
-  criteria complete. Launched by `/adx-build`.
+- `build` — **simple**: `work_location → build → commit? → summarize`. No
+  automated verification, no code review; the builder self-checks before
+  marking criteria complete. Launched by `/adx-build`.
 - `build-verify` — **the full pipeline** (default for `/adx-build-verify`):
-  `work_location → build → verify → code_review → finalize → summarize`.
+  `work_location → build → verify → code_review → finalize → commit? →
+  summarize`.
+
+Both build pipelines end with an optional **commit & push** phase (`commit?`
+above), controlled by the `commit` launch parameter: `commit=true` runs the
+commit & push step automatically (the "Commit changes?" picker is skipped),
+`commit=false` skips it, and without the parameter an interactive
+"Commit changes?" picker is shown (auto mode skips it — no commit by
+default). The step stages only the session's files (never `git add -A`),
+commits with a clear message, and pushes (rebase onto origin if rejected).
+An optional `message` launch parameter sets the exact commit message
+verbatim (without it, the agent derives one from the staged diff).
+In a **fresh worktree** (the `worklocation=new` path) it commits on the
+`adx/<slug>` branch and pushes that branch only — `git push -u origin
+adx/<slug>` — with **no merge into the base branch**: the merge stays manual
+(open a PR or `git merge adx/<slug>` later), and the worktree + branch are
+kept in place for follow-up work.
 - `pr-review` — PR review + fixes + squash-merge (requires `gh`), launched
   with `/adx-build pr-review pr_number=123`.
 - `commit` — **commit & push**: `check_status → stage → commit → push →

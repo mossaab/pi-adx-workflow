@@ -40,6 +40,7 @@ const stateDir = join(scratchRepo, '.pi', 'adx-flow')
 const userMessages = []
 const userMessageOpts = [] // parallel to userMessages: the deliverAs options passed
 const notifications = []
+const selects = [] // every ui.select call: { title, options }
 let widgetRefreshes = 0
 
 function fakeCtx() {
@@ -54,7 +55,9 @@ function fakeCtx() {
       select: async (title, options) => {
         // Simulate user choices:
         // - "Where to work" → work in current workspace
+        // - "Commit changes?" → Commit & push (first option)
         // - "Approve Fix Plan" → apply
+        selects.push({ title, options })
         if (title.includes('Where to work')) return 'Work in current workspace'
         return options[0]
       },
@@ -263,8 +266,31 @@ for (const f of s2.metadata['review_findings']) f.status = 'resolved'
 writeFileSync(statePath, JSON.stringify(s2, null, 2))
 await executor.onStepDone({})
 
+// commit_changes user step: no commit param in this run → the picker is
+// offered; the simulated user picks "Commit & push" (options[0]).
+const commitPicker = selects.find((s) => s.title.includes('Commit changes?'))
+check(
+  'commit picker offered "Commit & push" / "Leave uncommitted"',
+  commitPicker?.options?.[0] === 'Commit & push' && commitPicker?.options?.[1] === 'Leave uncommitted',
+)
+check(
+  'commit_push prompt injected (worktree: push adx/<slug> only, merge stays manual)',
+  userMessages.some(
+    (m) =>
+      m.includes('git push -u origin adx/') &&
+        m.includes('Do NOT merge the branch into the base branch'),
+  ),
+)
+
+// LLM finishes the commit step (result "pushed" satisfies the step_result gate)
+await executor.onStepDone({ result: 'pushed' })
+
 // Summarize agent step injected
 check('summarize prompt injected', userMessages.some((m) => m.includes('What to test')))
+check(
+  'summarize prompt carries the commit-state section',
+  userMessages.some((m) => m.includes('Commit state')),
+)
 // Live progress feed: the verifier logged notes, and the executor reset the
 // feed before the code_review sub-agent step (no stale notes in the widget).
 check('verifier wrote display-only progress notes', verifierWroteProgress)
@@ -634,6 +660,105 @@ check(
   check('new worktree folder created', existsSync(join(wtDir, 'dark-theme-2')))
   check('new worktree registered in git', git('worktree list').includes('dark-theme-2'))
   check('no git errors propagated', gitFailures === 0)
+}
+
+// ------------------------------------------------------------------ commit param routing (commit=true / commit=false)
+// The simple `build` workflow has no sub-agent steps, so the spawn fake throws.
+{
+  const { execSync } = await import('node:child_process')
+  const scratch3 = mkdtempSync(join(tmpdir(), 'adx-e2e-commit-'))
+  const repo3 = join(scratch3, 'repo')
+  mkdirSync(repo3, { recursive: true })
+  writeFileSync(join(repo3, 'index.js'), 'export const x = 1\n')
+  const gitEnv3 = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'e2e',
+    GIT_AUTHOR_EMAIL: 'e2e@e2e.test',
+    GIT_COMMITTER_NAME: 'e2e',
+    GIT_COMMITTER_EMAIL: 'e2e@e2e.test',
+  }
+  const git3 = (args) => execSync(`git ${args}`, { cwd: repo3, encoding: 'utf8', env: gitEnv3 }).trim()
+  git3('init -q')
+  git3('add index.js')
+  git3('commit -qm init')
+
+  const makeCommitCtx = (session) => ({
+    cwd: repo3,
+    sessionManager: { getSessionId: () => session },
+    hasUI: true,
+    ui: {
+      notify: () => {},
+      select: async (_title, options) => options[0],
+      setWidget: () => {},
+      setStatus: () => {},
+      theme: { fg: (_c, t) => t, bold: (t) => t, strikethrough: (t) => t },
+    },
+  })
+  const mkCommitExec = (msgs, notes) =>
+    new AdxExecutor({
+      pi: { sendUserMessage: (m) => msgs.push(m) },
+      notify: (m) => notes.push(m),
+      updateWidget: () => {},
+      spawn: async () => {
+        throw new Error('no sub-agent steps in commit scenarios')
+      },
+      resume: async () => {
+        throw new Error('no sub-agent steps in commit scenarios')
+      },
+    })
+  const readState3 = (session) =>
+    JSON.parse(readFileSync(join(repo3, '.pi', 'adx-flow', 'state', `${session}.json`), 'utf8'))
+
+  // (a) commit=true → the "Commit changes?" picker is auto-skipped and the
+  // commit_push prompt (with the worktree push-only instructions) is injected.
+  {
+    const msgs = []
+    const notes = []
+    const exec = mkCommitExec(msgs, notes)
+    await exec.launch('build', makeCommitCtx('e2e-commit-true'), 'commit=true')
+    check('commit=true: build prompt injected', msgs.some((m) => m.includes('Implement the task')))
+    await exec.onStepDone({}) // build done → commit_changes auto-skip
+    check(
+      'commit=true: "Commit changes?" picker auto-skipped',
+      notes.some((n) => n.includes('auto-skipping user step "Commit changes?" (commit=true)')),
+    )
+    check(
+      'commit=true: commit_push prompt injected (worktree instructions: push adx/<slug>, no auto-merge)',
+      msgs.at(-1)?.includes('git push -u origin adx/') &&
+        msgs.at(-1)?.includes('Do NOT merge the branch into the base branch') &&
+        msgs.at(-1)?.includes('git rev-parse --abbrev-ref HEAD'),
+    )
+    // A failed push does not satisfy the step_result gate → the nudgePrompt
+    // re-fires on the same step (the gate keeps the run until a success result).
+    await exec.onStepDone({ result: 'push-failed: remote rejected (non-fast-forward)' })
+    check(
+      'commit=true: failed push re-nudges the commit step (nudgePrompt injected)',
+      msgs.at(-1)?.includes('The push has not succeeded yet') &&
+        readState3('e2e-commit-true').execution?.currentStep === 'commit_push',
+    )
+    await exec.onStepDone({ result: 'pushed' }) // push succeeded → summarize
+    check('commit=true: summarize prompt injected after the commit step', msgs.at(-1)?.includes('What to test'))
+    await exec.onStepDone({})
+    check('commit=true: run finished ($done)', readState3('e2e-commit-true').execution?.status === 'done')
+  }
+
+  // (b) commit=false → the picker is auto-skipped straight to summarize,
+  // and no commit_push prompt is ever injected.
+  {
+    const msgs = []
+    const notes = []
+    const exec = mkCommitExec(msgs, notes)
+    await exec.launch('build', makeCommitCtx('e2e-commit-false'), 'commit=false')
+    await exec.onStepDone({}) // build done → commit_changes auto-skip
+    check(
+      'commit=false: "Commit changes?" picker auto-skipped to summarize',
+      notes.some((n) => n.includes('auto-skipping user step "Commit changes?" (commit=false)')) &&
+        msgs.at(-1)?.includes('What to test'),
+    )
+    check('commit=false: no commit_push prompt injected', !msgs.some((m) => m.includes('git push -u origin adx/')))
+    await exec.onStepDone({})
+    check('commit=false: run finished ($done)', readState3('e2e-commit-false').execution?.status === 'done')
+  }
 }
 
 // ------------------------------------------------------------------ spec uniqueness (no silent overwrite)

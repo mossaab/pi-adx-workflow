@@ -4,7 +4,21 @@
     "name": "Build (simple)",
     "description": "Simple build: implement the criteria and summarize. No automated verification, no code review. Use /adx-build-verify for the full pipeline.",
     "version": "1.0.0",
-    "color": "#22c55e"
+    "color": "#22c55e",
+    "parameters": [
+      {
+        "id": "commit",
+        "label": "Commit & push",
+        "description": "Set to 'true' to commit and push the work after the pipeline (auto-skips the 'Commit changes?' picker); 'false' to skip the commit step and leave changes uncommitted. In a fresh worktree this pushes the adx/<slug> branch only — the merge into the base branch stays manual.",
+        "required": false
+      },
+      {
+        "id": "message",
+        "label": "Commit message",
+        "description": "Optional: the exact commit message to use in the commit & push phase. If omitted, the agent writes a clear message from the staged diff.",
+        "required": false
+      }
+    ]
   },
   "entryStep": "work_location",
   "settings": {
@@ -17,18 +31,50 @@
       "type": "user",
       "phase": "build",
       "transitions": [
-        { "when": { "type": "param", "key": "auto", "value": "true" }, "goto": "build" },
-        { "when": { "type": "param", "key": "worklocation", "value": "current" }, "goto": "build" },
-        { "when": { "type": "param", "key": "worklocation", "value": "new" }, "goto": "setup_workspace" },
         {
-          "when": { "type": "step_result", "result": "Work in current workspace" },
+          "when": {
+            "type": "param",
+            "key": "auto",
+            "value": "true"
+          },
           "goto": "build"
         },
         {
-          "when": { "type": "step_result", "result": "Start a new workspace" },
+          "when": {
+            "type": "param",
+            "key": "worklocation",
+            "value": "current"
+          },
+          "goto": "build"
+        },
+        {
+          "when": {
+            "type": "param",
+            "key": "worklocation",
+            "value": "new"
+          },
           "goto": "setup_workspace"
         },
-        { "when": { "type": "always" }, "goto": "build" }
+        {
+          "when": {
+            "type": "step_result",
+            "result": "Work in current workspace"
+          },
+          "goto": "build"
+        },
+        {
+          "when": {
+            "type": "step_result",
+            "result": "Start a new workspace"
+          },
+          "goto": "setup_workspace"
+        },
+        {
+          "when": {
+            "type": "always"
+          },
+          "goto": "build"
+        }
       ]
     },
     {
@@ -39,7 +85,12 @@
       "agentId": "builder",
       "prompt": "Set up a fresh workspace for this task. This step is ONLY about workspace setup — do not start implementing the task or modifying files here.\n\n1. Pick a short, descriptive lowercase slug from the task (hyphen-separated, e.g. `dark-theme`). Do NOT ask the user for the name — decide based on the task and just do it.\n2. Check for name collisions BEFORE creating: run `[ -e ../.adx-worktrees/<slug> ]` (does the folder exist?) and `git branch --list 'adx/<slug>'` (does the branch exist?). If either is taken, append a numeric suffix in a loop — try `<slug>-2`, then `<slug>-3`, ... — until BOTH the folder and the branch are free. Do not ask the user; just take the next free one.\n3. Create the worktree with the free name: `git worktree add '../.adx-worktrees/<slug>' -b 'adx/<slug>' HEAD` (using the collision-free slug from step 2).\n4. Do NOT begin implementing or testing anything here — the next step (\"Implement\") owns all coding.\n5. In your visible confirmation, state the final worktree path (e.g. 'Workspace ready at ../.adx-worktrees/dark-theme-2'), then call flow_step_done with the final slug in its content (e.g. `final-slug=dark-theme-2`) so it is recorded in the run state for later steps.",
       "transitions": [
-        { "when": { "type": "always" }, "goto": "build" }
+        {
+          "when": {
+            "type": "always"
+          },
+          "goto": "build"
+        }
       ]
     },
     {
@@ -56,11 +107,103 @@
             "type": "metadata_all_in",
             "key": "criteria",
             "field": "status",
-            "values": ["completed", "passed"]
+            "values": [
+              "completed",
+              "passed"
+            ]
+          },
+          "goto": "commit_changes"
+        },
+        {
+          "when": {
+            "type": "always"
+          },
+          "goto": "build"
+        }
+      ]
+    },
+    {
+      "id": "commit_changes",
+      "name": "Commit changes?",
+      "type": "user",
+      "phase": "build",
+      "transitions": [
+        {
+          "when": {
+            "type": "param",
+            "key": "commit",
+            "value": "true"
+          },
+          "goto": "commit_push"
+        },
+        {
+          "when": {
+            "type": "param",
+            "key": "commit",
+            "value": "false"
           },
           "goto": "summarize"
         },
-        { "when": { "type": "always" }, "goto": "build" }
+        {
+          "when": {
+            "type": "param",
+            "key": "auto",
+            "value": "true"
+          },
+          "goto": "summarize"
+        },
+        {
+          "when": {
+            "type": "step_result",
+            "result": "Commit & push"
+          },
+          "goto": "commit_push"
+        },
+        {
+          "when": {
+            "type": "step_result",
+            "result": "Leave uncommitted"
+          },
+          "goto": "summarize"
+        }
+      ]
+    },
+    {
+      "id": "commit_push",
+      "name": "Commit & push",
+      "type": "agent",
+      "phase": "build",
+      "agentId": "builder",
+      "prompt": "Commit and push the work done in this session. This step ONLY commits and pushes — do not modify source files.\n\n1. Detect the context: run `git rev-parse --abbrev-ref HEAD`.\n   - If the branch starts with `adx/` you are in a FRESH WORKTREE (the `adx/<slug>` branch created by the workspace-setup step); otherwise you are in the CURRENT WORKSPACE.\n\n2. Stage only this session's files: run `git status` and pick the files that belong to this session's work (no unrelated or untracked junk like .DS_Store, logs, editor files). Stage them with explicit paths — `git add <file1> <file2> ...` — NEVER `git add -A` or `git add .`. If the working tree is clean, say 'nothing to commit' and call flow_step_done with result \"nothing-to-commit\".\n\n3. Create the commit. Specified commit message: {{message}}\n   - If the value above is a real message (the `message` launch parameter was provided), use it verbatim.\n   - If it is still the literal `{{message}}` (no `message` parameter was passed), inspect `git diff --staged` and write a clear, conventional message (`feat: ...`, `fix: ...`, `chore: ...`).\n   Verify with `git log -1 --stat`.\n\n4. Push:\n   - Current workspace: `git push`. If the branch has no upstream yet, use `git push -u origin <branch>`. If the push is rejected because origin is ahead: `git fetch origin`, rebase onto `origin/<branch>`, fix any conflicts preserving the intent of both sides, `git rebase --continue`, then push again. Prefer rebase over force-push.\n   - Fresh worktree: `git push -u origin adx/<slug>` (fetch + rebase onto the latest if the push is rejected). Do NOT merge the branch into the base branch — the merge is left MANUAL (open a PR, or `git merge adx/<slug>` later). Keep the worktree and the branch in place.\n   - If the repository has no remote (`git remote` is empty), skip the push and say so.\n\n5. In your visible confirmation, state: the commit hash, the branch, and the remote state. For a fresh worktree, also state the branch name (e.g. `adx/dark-theme`) and the next steps for the user (open a PR, or merge manually with `git merge adx/<slug>`). Then call flow_step_done with a result that reports the outcome: \"pushed\", \"nothing-to-commit\", or \"no-remote\". If the push failed, call flow_step_done with result \"push-failed: <reason>\" — the workflow will nudge you to retry.",
+      "nudgePrompt": "The push has not succeeded yet. Check the push error, `git fetch` and rebase onto the latest origin commits, resolve any conflicts, and push again (rebase over force-push; `git push --force-with-lease` only if the rebase rewrote commits that were already pushed). Call flow_step_done only once `git status` shows the branch is up to date with origin — or confirm there is no remote to push to.",
+      "transitions": [
+        {
+          "when": {
+            "type": "step_result",
+            "result": "pushed"
+          },
+          "goto": "summarize"
+        },
+        {
+          "when": {
+            "type": "step_result",
+            "result": "nothing-to-commit"
+          },
+          "goto": "summarize"
+        },
+        {
+          "when": {
+            "type": "step_result",
+            "result": "no-remote"
+          },
+          "goto": "summarize"
+        },
+        {
+          "when": {
+            "type": "always"
+          },
+          "goto": "commit_push"
+        }
       ]
     },
     {
@@ -69,8 +212,15 @@
       "type": "agent",
       "phase": "build",
       "agentId": "builder",
-      "prompt": "Produce a concise summary of what was accomplished in this session. Include:\n- What was implemented or fixed\n- Key files modified\n- Any notable decisions or tradeoffs\n- **What to test** — a short, actionable mini-tutorial from the user's perspective:\n  - Concrete UI flows or interactions to try, with the expected outcome\n  - Edge cases worth poking at\n  - One action per line, numbered, so the user can follow along without extra context\n\nCall flow_step_done when done.",
-      "transitions": [{ "when": { "type": "always" }, "goto": "$done" }]
+      "prompt": "Produce a concise summary of what was accomplished in this session. Include:\n- What was implemented or fixed\n- Key files modified\n- Any notable decisions or tradeoffs\n- **Commit state** — if the commit & push step ran in this run: the commit hash, the branch, and the remote state. For a fresh worktree, state explicitly that the `adx/<slug>` branch was pushed and the merge into the base branch is left manual (open a PR, or `git merge adx/<slug>` later)\n- **What to test** — a short, actionable mini-tutorial from the user's perspective:\n  - Concrete UI flows or interactions to try, with the expected outcome\n  - Edge cases worth poking at\n  - One action per line, numbered, so the user can follow along without extra context\n\nCall flow_step_done when done.",
+      "transitions": [
+        {
+          "when": {
+            "type": "always"
+          },
+          "goto": "$done"
+        }
+      ]
     }
   ],
   "startCondition": {
