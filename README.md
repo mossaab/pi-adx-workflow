@@ -1,5 +1,6 @@
 # pi-adx-workflow
 
+[![npm](https://img.shields.io/npm/v/pi-adx-workflow)](https://www.npmjs.com/package/pi-adx-workflow)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![pi-coding-agent](https://img.shields.io/badge/pi-coding-agent-%E2%89%A51.5-blueviolet.svg)](https://github.com/earendil-works/pi)
 
@@ -60,27 +61,27 @@ per the pi package conventions).
 
 ## Install
 
-Recommended: install as a [pi package](https://github.com/earendil-works/pi) from git:
+Recommended: install as a [pi package](https://github.com/earendil-works/pi) from npm:
 
 ```sh
-pi install git:github.com/mossaab/pi-adx-workflow
+pi install npm:pi-adx-workflow
 ```
 
 Variants:
 
 ```sh
 # project-local (written to .pi/settings.json, loads after project trust)
-pi install --local git:github.com/mossaab/pi-adx-workflow
+pi install --local npm:pi-adx-workflow
 
-# from npm
-pi install npm:pi-adx-workflow
+# from git (tracks the main branch)
+pi install git:github.com/mossaab/pi-adx-workflow
 ```
 
 Manage the install:
 
 ```sh
 pi list                                    # show configured packages
-pi remove git:github.com/mossaab/pi-adx-workflow
+pi remove npm:pi-adx-workflow
 pi update --extensions                     # reconcile git checkouts / npm specs
 ```
 
