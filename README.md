@@ -118,10 +118,6 @@ re-create the symlink.
 Ctrl+Alt+A                   toggle plan/spec mode (spec mode exits; plan mode toggles)
 ```
 
-Deprecated aliases (kept for compatibility, marked deprecated in the TUI):
-`/adx-build-mode` → `/adx-approve`, `/adx-build` → `/adx-run`,
-`/adx-build-verify` → `/adx-run build-verify`.
-
 ### Auto mode (unattended pipeline)
 
 ```

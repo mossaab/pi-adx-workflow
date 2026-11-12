@@ -15,10 +15,6 @@
  *   /adx-resume           resume a blocked/waiting workflow
  *   /adx-cancel           cancel the current workflow run
  *   /adx-config           show config / "edit" opens a menu / "set key=value [project]"
- * Deprecated aliases (kept for compatibility):
- *   /adx-build-mode       → /adx-approve
- *   /adx-build            → /adx-run
- *   /adx-build-verify     → /adx-run build-verify
  * Flag:
  *   --adx-auto         unattended pipeline: plan → build → verify → recap without approvals
  * Shortcut:
@@ -319,8 +315,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   })
 
   // Approve the plan/spec: turn the plan/spec read-only mode off (build mode)
-  // without launching a workflow. The deprecated /adx-build-mode alias shares
-  // this exact handler so both stay in lockstep.
+  // without launching a workflow.
   const approveHandler = async (_args: string, c: ExtensionCommandContext) => {
     ctx = c
     if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
@@ -331,14 +326,9 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description: 'Approve the plan/spec: switch to build mode (turn plan/spec mode off) without launching a workflow',
     handler: approveHandler,
   })
-  pi.registerCommand('adx-build-mode', {
-    description: '(deprecated — use /adx-approve) Switch to build mode (turn plan/spec mode off) without launching a workflow',
-    handler: approveHandler,
-  })
 
   // Generic launcher: switch to build mode and launch a workflow — the
   // configured default one, or an explicit workflow id as the first token.
-  // The deprecated /adx-build alias shares this exact handler.
   const runHandler = async (args: string, c: ExtensionCommandContext) => {
     ctx = c
     exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
@@ -360,18 +350,6 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description:
       'Switch to build mode and launch a workflow (default: the configured build one). Pass a workflow id as the first token, e.g. /adx-run pr-review pr_number=123',
     handler: runHandler,
-  })
-  pi.registerCommand('adx-build', {
-    description: '(deprecated — use /adx-run) Switch to build mode and launch a workflow',
-    handler: runHandler,
-  })
-  // Deprecated: /adx-run build-verify is the canonical form — this alias
-  // delegates to the generic launcher with "build-verify" prefixed, so the
-  // build-verify launch path (config defaults included) lives in one place.
-  pi.registerCommand('adx-build-verify', {
-    description: '(deprecated — use /adx-run build-verify) Switch to build mode and launch the full build-verify workflow (verify + code review; add skip_review=true to skip the review)',
-    handler: (args: string, c: ExtensionCommandContext) =>
-      runHandler('build-verify' + (args?.trim() ? ' ' + args.trim() : ''), c),
   })
 
   pi.registerCommand('adx-status', {
@@ -566,16 +544,16 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     if (specMode) {
       sections['adx-spec'] = SPEC_PROMPT_SECTION.trim()
       delete sections['adx-plan']
-      delete sections['adx-build']
+      delete sections['adx-impl']
     } else if (planMode) {
       sections['adx-plan'] = (autoMode ? AUTO_PLANNER_PROMPT_SECTION : PLANNER_PROMPT_SECTION).trim()
-      delete sections['adx-build']
+      delete sections['adx-impl']
     } else if (executor.isActive()) {
-      sections['adx-build'] = BUILDER_PROMPT_SECTION.trim()
+      sections['adx-impl'] = BUILDER_PROMPT_SECTION.trim()
       delete sections['adx-plan']
     } else {
       delete sections['adx-plan']
-      delete sections['adx-build']
+      delete sections['adx-impl']
       delete sections['adx-spec']
     }
   })

@@ -866,8 +866,6 @@ export class AdxExecutor {
     return {
       workdir: cwd,
       reason: currentStep ? this.reasonFor(currentStep) : '',
-      verifierFindings: run?.lastStepOutput['content'] ?? '',
-      previousStepOutput: run?.lastStepOutput['stdout'] ?? '',
       criteriaCount: state?.metadata['criteria']?.length ?? 0,
       pendingCount: state ? pendingCriteriaCount(state) : 0,
       criteriaList: formatCriteriaList(state?.metadata['criteria'] ?? []),

@@ -13,10 +13,6 @@ import { join } from 'node:path'
 export interface TemplateContext {
   workdir: string
   reason: string
-  /** @deprecated Use stepOutput.content instead */
-  verifierFindings: string
-  /** @deprecated Use stepOutput.stdout instead */
-  previousStepOutput: string
   criteriaCount: number
   pendingCount: number
   criteriaList: string
@@ -202,9 +198,6 @@ export function resolveTemplate(template: string, ctx: TemplateContext): string 
   }
   // Flat dotted keys: {{stepOutput.<key>}}
   result = result.replace(/\{\{stepOutput\.([\w.-]+)\}\}/g, (_, key) => ctx.stepOutput[key] ?? '')
-  // Deprecated aliases
-  result = result.replace(/\{\{verifierFindings\}\}/g, ctx.stepOutput['content'] ?? '')
-  result = result.replace(/\{\{previousStepOutput\}\}/g, ctx.stepOutput['stdout'] ?? '')
   // Resolve user-supplied params (lower priority — can't override built-ins)
   for (const [key, value] of Object.entries(ctx.params)) {
     result = result.replaceAll(`{{${key}}}`, value)
