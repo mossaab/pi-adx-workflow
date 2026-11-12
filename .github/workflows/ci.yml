@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    env:
+      # Point the jiti lookup at the devDependency copy (no pi install on runners)
+      ADX_FLOW_JITI: ${{ github.workspace }}/node_modules/jiti
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Smoke-load extension
+        run: npm run smoke
+
+      - name: E2E executor test
+        run: npm run e2e
+
+      - name: E2E state-lock test
+        run: npm run e2e:lock

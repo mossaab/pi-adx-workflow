@@ -401,7 +401,8 @@ engine — steps, ordered transitions, metadata conditions, nudge re-entry,
 ```sh
 git clone https://github.com/mossaab/pi-adx-workflow.git
 cd pi-adx-workflow
-npm install            # dev dependencies only (typescript, @types/node)
+npm install            # dev dependencies (typescript, @types/node, jiti, typebox,
+                       # @earendil-works/pi-ai + pi-coding-agent for the test scripts)
 npm run setup-dev      # link host-provided packages (typebox, @earendil-works/*)
                        # from your pi install into node_modules
 
@@ -424,6 +425,20 @@ Extension development loop: symlink the repo into
 `~/.pi/agent/extensions/` (see [Install](#development-install-symlink)), edit
 `src/*.ts`, and restart pi (or `/reload`) — jiti loads the TypeScript
 directly, no build step.
+
+### CI/CD
+
+- **CI** (`.github/workflows/ci.yml`): on every push to `main` and on pull
+  requests, GitHub Actions runs `npm ci` → `typecheck` → `smoke` → `e2e` →
+  `e2e:lock` on Node 22. The test scripts' jiti lookup is pointed at the
+  devDependency copy via `ADX_FLOW_JITI` (runners have no pi install).
+- **Publish** (`.github/workflows/npm-publish.yml`): publishing a
+  [GitHub release](https://github.com/mossaab/pi-adx-workflow/releases)
+  (or the manual `workflow_dispatch`) runs the typecheck + smoke checks, then
+  `npm publish --provenance`. Configure the repo secret **`NPM_TOKEN`** with
+  an npm automation token (fine-grained or classic with publish access);
+  `--provenance` additionally requires the GitHub OIDC token, which the
+  workflow requests via the `id-token: write` permission.
 
 ## Contributing
 
