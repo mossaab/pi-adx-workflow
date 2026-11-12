@@ -34,6 +34,18 @@ export function getBuildModeTools(restoredTools: string[]): string[] {
   return [...new Set(restoredTools)]
 }
 
+/** Tools that stay available in spec mode (spec mode = plan-mode read-only set + the spec writer). */
+export const SPEC_MODE_TOOLS = ['spec_write']
+
+export function getSpecModeTools(activeToolNames: string[]): string[] {
+  return [
+    ...new Set([
+      ...getPlanModeTools(activeToolNames),
+      ...SPEC_MODE_TOOLS,
+    ]),
+  ]
+}
+
 // ============================================================================
 // Read-only bash allowlist (port of plan-mode/utils.ts isSafeCommand)
 // ============================================================================
@@ -229,6 +241,29 @@ You MUST NOT make any edits, implementations, commits, config changes, or other 
 - Add each final criterion with flow_meta (action "add", key "criteria").
 - Present the complete criteria list as a single numbered recap, then call flow_plan_done to hand off to the build phase. Do not stop before calling it.
 - Do not call flow_step_done in plan mode; it is only used inside a running workflow step.
+`
+
+export const SPEC_PROMPT_SECTION = `
+# Spec Mode (adx-workflow)
+
+CRITICAL: Spec mode ACTIVE - you are in a read-only phase (brainstorming / research, no coding).
+
+You may only inspect, analyze, ask clarifying questions, research, and draft a spec. The ONLY file you may write is the spec document itself, via the spec_write tool (the workspace stays read-only: edit/write stay disabled, bash is read-only).
+
+## Responsibility
+
+- Understand the user's goal before drafting. If the goal is ambiguous, ask BEFORE writing the spec using the ask_user tool (1-3 focused questions per turn): ALWAYS prefer type "choice" with 2-5 concrete option labels — option lists are easier to answer than free text; use "confirm" for yes/no, "text" only when no sensible options exist. A dismissed question means "proceed with your best judgment and note the assumption".
+- Explore the codebase with read-only actions when the spec must reflect how the project actually works.
+- Research on the web when it helps (web_search, fetch_content, source_check); capture useful findings as notes with links.
+- Then draft the spec as a single markdown document with these sections:
+  1. **Context & goal** — what and why, in a few sentences.
+  2. **Research notes** — relevant findings, links, trade-offs considered (omit if none).
+  3. **Decisions & assumptions** — what was decided, what is assumed, open questions.
+  4. **Acceptance criteria** — a numbered checklist: self-contained, verifiable descriptions of what must be true AND how to verify it.
+- When the spec is complete, call spec_write EXACTLY ONCE with the full markdown (use the tool's default path unless the user asked for a specific one). Do not call it again.
+- This is a spec/brainstorm/research session, NOT a plan-to-build: do NOT hand off to a build, do NOT run verification, do NOT run a code review. After spec_write succeeds the session is in normal build mode — stop there.
+- Do not call flow_step_done or flow_plan_done in spec mode; they belong to the plan/build workflows.
+- If you must stop mid-step (for example context pressure), first record where you stopped and the exact next action with flow_meta (action "add", key "resume", description "..."), then stop. You will be auto-continued with that note.
 `
 
 export const BUILDER_PROMPT_SECTION = `

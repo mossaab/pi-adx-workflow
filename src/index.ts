@@ -8,7 +8,8 @@
  *
  * Commands:
  *   /adx-plan          enter plan mode (read-only; planner proposes criteria)
- *   /adx-build-mode    switch to build mode (turn plan mode off; no launch)
+ *   /adx-spec [path]   enter spec mode (read-only brainstorm/research; writes a spec file, no build)
+ *   /adx-build-mode    switch to build mode (turn plan/spec mode off; no launch)
  *   /adx-build         switch to build mode + launch the simple build workflow
  *   /adx-build-verify  switch to build mode + launch the full build-verify workflow
  *   /adx-status        show current workflow state
@@ -25,16 +26,20 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from '@earendil-works/pi-coding-agent'
-import { createFlowMetaTool, createFlowStepDoneTool, createFlowPlanDoneTool } from './tools.js'
+import { createFlowMetaTool, createFlowStepDoneTool, createFlowPlanDoneTool, createSpecWriteTool } from './tools.js'
 import {
   PLANNER_PROMPT_SECTION,
   AUTO_PLANNER_PROMPT_SECTION,
   BUILDER_PROMPT_SECTION,
+  SPEC_PROMPT_SECTION,
   activatePlanModeTools,
   getBuildModeTools,
+  getSpecModeTools,
   planModeBashGuard,
 } from './modes.js'
 import { loadState, mutateState, onStateWarning } from './store.js'
+import { composeSpecMarkdown, defaultSpecPath, specPathError, writeSpecFile } from './spec.js'
+import { resolve as resolvePath } from 'node:path'
 import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
@@ -61,7 +66,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   }
   let planMode = false
   let autoMode = false
+  let specMode = false
   let toolsBeforePlanMode: string[] | undefined
+  let toolsBeforeSpecMode: string[] | undefined
+  /** Spec file location pinned via /adx-spec <path> (relative to cwd). */
+  let specPath: string | undefined
   let ctx: ExtensionContext | undefined
   /** User/project config (loaded at session_start; defaults until then). */
   let config: AdxConfig = {}
@@ -75,6 +84,19 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     const sid = sessionId ?? c.sessionManager.getSessionId()
     void mutateState(c.cwd, sid, (state) => {
       state.planMode = on
+    }).catch(() => {
+      /* best effort — the in-memory flag is authoritative */
+    })
+  }
+
+  /** Persist the spec-mode flag (and its pinned spec path) for resume. */
+  function persistSpecMode(on: boolean, path?: string): void {
+    const c = ctx
+    if (!c) return
+    const sid = sessionId ?? c.sessionManager.getSessionId()
+    void mutateState(c.cwd, sid, (state) => {
+      state.specMode = on
+      state.specPath = on ? path : undefined
     }).catch(() => {
       /* best effort — the in-memory flag is authoritative */
     })
@@ -140,7 +162,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
 
   // Planning-complete hand-off: in auto mode it exits plan mode and launches
   // the full build-verify pipeline (no review); in interactive mode the user
-  // picks the pipeline/workspace via a picker.
+  // picks the pipeline/workspace via a picker (or exports a spec and stops).
   pi.registerTool(
     createFlowPlanDoneTool({
       autoMode: () => autoMode,
@@ -154,7 +176,34 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         const c = ctx
         if (c) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       },
+      specOnly: async () => {
+        // "Spec only — stop": export the stored criteria as a spec document
+        // (.pi/specs/<slug>.md) and stop — no workflow is launched.
+        const c = ctx
+        if (!c) throw new Error('no active session')
+        const sid = sessionId ?? c.sessionManager.getSessionId()
+        const state = await loadState(c.cwd, sid)
+        const criteria = state.metadata['criteria'] ?? []
+        const rel = defaultSpecPath(c.cwd)
+        await writeSpecFile(c.cwd, resolvePath(c.cwd, rel), composeSpecMarkdown({ criteria, title: 'Session spec' }))
+        return rel
+      },
       notify: (m, l) => ctx?.ui.notify(m, l ?? 'info'),
+    }),
+  )
+
+  // Spec-mode write channel: the ONLY way spec mode touches the filesystem.
+  // defaultActive: false — it is activated only while spec mode is on.
+  pi.registerTool(
+    createSpecWriteTool({
+      cwd: () => ctx?.cwd,
+      pinnedPath: () => specPath,
+      notify: (m, l) => ctx?.ui.notify(m, l ?? 'info'),
+      onWritten: (absPath) => {
+        const c = ctx
+        specPath = absPath
+        if (specMode) exitSpecMode((m, l) => c?.ui.notify(m, l ?? 'info'))
+      },
     }),
   )
 
@@ -166,6 +215,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
 
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
     if (planMode) return
+    // Plan mode and spec mode are mutually exclusive read-only modes.
+    if (specMode) exitSpecMode(() => {})
     planMode = true
     toolsBeforePlanMode = pi.getActiveTools()
     let tools = activatePlanModeTools(pi.getActiveTools())
@@ -187,6 +238,42 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     notify('adx: plan mode OFF (build mode).', 'info')
   }
 
+  function enterSpecMode(
+    notify: (msg: string, level?: 'info' | 'warning' | 'error') => void,
+    pathArg?: string,
+  ): void {
+    if (specMode) return
+    // Spec mode and plan mode are mutually exclusive read-only modes.
+    if (planMode) exitPlanMode(() => {})
+    specMode = true
+    toolsBeforeSpecMode = pi.getActiveTools()
+    pi.setActiveTools(getSpecModeTools(pi.getActiveTools()))
+    specPath = pathArg || undefined
+    persistSpecMode(true, specPath)
+    showBadge(`adx: [SPEC] read-only · /adx-build-mode to exit${specPath ? ` · spec: ${specPath}` : ''}`)
+    notify(
+      'adx: spec mode ON (read-only brainstorm/research). Explore, research, then call spec_write ONCE with the full spec markdown. Exit: /adx-build-mode or Ctrl+Alt+A.',
+      'info',
+    )
+  }
+
+  function exitSpecMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
+    if (!specMode) return
+    specMode = false
+    pi.setActiveTools(getBuildModeTools(toolsBeforeSpecMode ?? pi.getActiveTools()))
+    toolsBeforeSpecMode = undefined
+    specPath = undefined
+    persistSpecMode(false)
+    showBadge(undefined)
+    notify('adx: spec mode OFF (build mode).', 'info')
+  }
+
+  /** Exit whichever read-only mode (plan/spec) is active — used before launching a build. */
+  function exitReadOnlyModes(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void): void {
+    if (specMode) exitSpecMode(notify)
+    if (planMode) exitPlanMode(notify)
+  }
+
   // ------------------------------------------------------------------ commands
   pi.registerCommand('adx-plan', {
     description: 'Enter plan mode (read-only; planner proposes acceptance criteria)',
@@ -196,11 +283,41 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     },
   })
 
+  pi.registerCommand('adx-spec', {
+    description:
+      'Enter spec mode (read-only brainstorming/research; writes a spec file, no build/verify/review). '
+      + 'Optional .md path arg, e.g. /adx-spec SPEC.md (default: .pi/specs/<slug>.md)',
+    handler: async (args, c) => {
+      ctx = c
+      if (specMode) {
+        c.ui.notify('adx: already in spec mode (exit with /adx-build-mode or Ctrl+Alt+A)', 'info')
+        return
+      }
+      const raw = (args ?? '').trim()
+      if (raw) {
+        // The path must be a single token and a valid .md location inside the
+        // project — refuse immediately, before the user spends a session on it.
+        if (raw.includes(' ')) {
+          c.ui.notify('adx: usage: /adx-spec <path.md> (a single .md path inside the project)', 'warning')
+          return
+        }
+        const problem = specPathError(c.cwd, raw)
+        if (problem) {
+          c.ui.notify(`adx: ${problem}`, 'warning')
+          return
+        }
+      }
+      if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      enterSpecMode((m, l) => c.ui.notify(m, l ?? 'info'), raw || undefined)
+    },
+  })
+
   pi.registerCommand('adx-build-mode', {
-    description: 'Switch to build mode (turn plan mode off) without launching a workflow',
+    description: 'Switch to build mode (turn plan/spec mode off) without launching a workflow',
     handler: async (_args, c) => {
       ctx = c
-      if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       else c.ui.notify('adx: already in build mode (plan mode is off)', 'info')
     },
   })
@@ -210,7 +327,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       'Switch to build mode and launch a workflow (default: the configured build one). Pass a workflow id as the first token, e.g. /adx-build pr-review pr_number=123',
     handler: async (args, c) => {
       ctx = c
-      exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
       // First bare token (no '=') names the workflow; the rest are key=value params.
       const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
       const first = tokens[0]
@@ -230,7 +347,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description: 'Switch to build mode and launch the full build-verify workflow (verify + code review; add skip_review=true to skip the review)',
     handler: async (args, c) => {
       ctx = c
-      exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
       try {
         await executor.launch('build-verify', c, withConfigDefaults(args))
       } catch (err) {
@@ -372,10 +489,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   })
 
   pi.registerShortcut('ctrl+alt+a', {
-    description: 'Toggle adx plan mode',
+    description: 'Toggle adx plan/spec mode (spec mode exits; plan mode enters/toggles)',
     handler: async (c) => {
       ctx = c
-      if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       else enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
     },
   })
@@ -408,6 +526,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       // pick up the unfinished plan (criteria are already in the state file).
       enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       c.ui.notify('adx: plan mode restored (unfinished plan from last stop — continue with flow_meta, then /adx-build)', 'info')
+    } else if (state.specMode === true) {
+      // The session was stopped mid-spec: restore spec mode (the spec file is
+      // still pending — continue, then call spec_write once).
+      enterSpecMode((m, l) => c.ui.notify(m, l ?? 'info'), state.specPath)
+      c.ui.notify('adx: spec mode restored (unfinished spec from last stop — continue, then call spec_write once)', 'info')
     }
   })
 
@@ -422,7 +545,11 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
    */
   pi.on('before_agent_start', (event) => {
     const sections = event.systemPromptOptions.sections
-    if (planMode) {
+    if (specMode) {
+      sections['adx-spec'] = SPEC_PROMPT_SECTION.trim()
+      delete sections['adx-plan']
+      delete sections['adx-build']
+    } else if (planMode) {
       sections['adx-plan'] = (autoMode ? AUTO_PLANNER_PROMPT_SECTION : PLANNER_PROMPT_SECTION).trim()
       delete sections['adx-build']
     } else if (executor.isActive()) {
@@ -431,25 +558,26 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     } else {
       delete sections['adx-plan']
       delete sections['adx-build']
+      delete sections['adx-spec']
     }
   })
 
-  /** Plan mode: guard bash tool calls against non-read-only commands. */
+  /** Plan/spec mode: guard bash tool calls against non-read-only commands. */
   pi.on('tool_call', (event) => {
-    if (!planMode || event.toolName !== 'bash') return
-    const args = (event.input ?? {}) as Record<string, unknown>
-    const problem = planModeBashGuard(args, (msg) =>
-      ctx?.ui.notify(msg, 'warning'),
-    )
-    if (problem) {
-      // Block the call and hand the reason back to the model as a tool result —
-      // WITHOUT terminate: the turn continues so the model can adapt (simpler
-      // read-only variant, another tool, or proceed with the plan). Plan mode
-      // itself stays on; only this one command is refused.
-      return { block: true, reason: problem }
+    if ((planMode || specMode) && event.toolName === 'bash') {
+      const args = (event.input ?? {}) as Record<string, unknown>
+      const problem = planModeBashGuard(args, (msg) =>
+        ctx?.ui.notify(msg, 'warning'),
+      )
+      if (problem) {
+        // Block the call and hand the reason back to the model as a tool result —
+        // WITHOUT terminate: the turn continues so the model can adapt (simpler
+        // read-only variant, another tool, or proceed with the plan). The mode
+        // itself stays on; only this one command is refused.
+        return { block: true, reason: problem }
+      }
     }
   })
-
   // ------------------------------------------------------------------ never-stop (auto-continue)
   //
   // When a run ends on an active agent step without flow_step_done (context

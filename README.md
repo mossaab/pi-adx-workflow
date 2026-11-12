@@ -102,7 +102,9 @@ re-create the symlink.
 
 ```
 /adx-plan                    enter plan mode (read-only)
-/adx-build-mode              switch to build mode (turn plan mode off, no launch)
+/adx-spec [path]             enter spec mode (read-only brainstorm/research; writes a spec file, no build)
+/adx-spec SPEC.md            spec mode with a custom spec location (default: .pi/specs/<slug>.md)
+/adx-build-mode              switch to build mode (turn plan/spec mode off, no launch)
 /adx-build                   switch to build mode + launch the simple build workflow (no verify/review)
 /adx-build-verify            switch to build mode + launch the full build-verify workflow
 /adx-build-verify skip_review=true   full workflow minus the code review step
@@ -110,7 +112,7 @@ re-create the symlink.
 /adx-resume                  resume a blocked/waiting workflow
 /adx-cancel                  cancel the current run
 /adx-config                  show the effective config ("edit" menu / "set key=value")
-Ctrl+Alt+A                   toggle plan mode
+Ctrl+Alt+A                   toggle plan/spec mode (spec mode exits; plan mode toggles)
 ```
 
 ### Auto mode (unattended pipeline)
@@ -133,7 +135,35 @@ Manual mode (`/adx-plan` + `/adx-build` / `/adx-build-verify`) is unchanged.
 
 When the planner finishes in interactive mode it calls `flow_plan_done`, which
 shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
-**Choose workspace** (current workspace or fresh worktree, then the pipeline).
+**Choose workspace** (current workspace or fresh worktree, then the pipeline) /
+**Spec only — stop** (export the stored criteria as a spec document and stop —
+no build is launched).
+
+### Spec mode (brainstorm / research, no code)
+
+`/adx-spec` is the "specs without dev" mode: pure brainstorming, research, and
+spec writing — **zero coding, zero verification, zero review**.
+
+- **Read-only workspace** — same gating as plan mode (edit/write disabled,
+  read-only bash allowlist). The single exception is the `spec_write` tool,
+  the only write channel: it writes the spec markdown file and nothing else.
+- **Iterative reasoning** — the spec agent asks you 1-3 focused questions per
+  turn (`ask_user`), explores the codebase read-only, and researches on the
+  web (`web_search`, `fetch_content`, `source_check`).
+- **Output = a spec document** — a markdown file with *Context & goal*,
+  *Research notes*, *Decisions & assumptions*, and an *Acceptance criteria*
+  checklist. Written to `.pi/specs/<slug>.md` by default (auto-generated
+  timestamp slug); pass a path to `/adx-spec` (e.g. `/adx-spec SPEC.md`) to
+  choose the location. `spec_write` is called exactly once, at the end.
+- **No hand-off** — after the spec is saved the session simply ends in normal
+  build mode; nothing is launched, verified, or reviewed. Exit spec mode early
+  with `/adx-build-mode` or Ctrl+Alt+A (no launch). Spec mode is persisted per
+  session and restored on resume (unfinished spec → continue, then call
+  `spec_write` once).
+
+After a regular plan, the `flow_plan_done` picker's **Spec only — stop**
+option does the same export: it composes the spec from the stored criteria,
+saves it to `.pi/specs/<slug>.md`, exits plan mode, and launches nothing.
 
 ### Typical session
 
@@ -151,7 +181,7 @@ shows a picker: **Build + verify (full pipeline)** / **Build (simple)** /
    with "What to test" is printed.
 
 State lives **per pi session** in `.pi/adx-flow/state/<sessionId>.json`
-(criteria, findings, execution state, plan-mode flag) — each session has its
+(criteria, findings, execution state, plan-mode and spec-mode flags) — each session has its
 own plan, and resuming a session restores exactly that session's plan/run.
 A new session starts fresh. On the first per-session load, an in-flight run
 still in the legacy shared `.pi/adx-flow/state.json` (status ≠ done) is
@@ -159,8 +189,8 @@ adopted into the new session's file once, so pre-existing runs keep working.
 Flow sub-agents (verifier / code reviewer) write to the *parent's* state file
 (passed via the `ADX_FLOW_STATE` env var) so their `flow_meta` updates land
 in the driving session's store. It survives pi restarts — `session_start`
-restores the resumed session's running run (and its plan mode if the session
-stopped mid-plan), and `/adx-resume` continues a blocked one.
+restores the resumed session's running run (and its plan/spec mode if the session
+stopped mid-plan or mid-spec), and `/adx-resume` continues a blocked one.
 
 ## Configuration
 
@@ -234,8 +264,9 @@ The workflow never parks itself on you:
 | --- | --- |
 | `flow_meta` | Shared workflow metadata store: `criteria`, `todos`, `review_findings`, `resume` (auto-continue notes) and `progress` (live display feed). Writes are atomic (per-process write chain + cross-process file lock — parent and `pi -p` children never lose updates); multi-item writes: `add_batch` (descriptions) / `update_batch` (items) |
 | `flow_step_done` | Ends the current workflow step; the executor evaluates transitions and injects the next prompt (or a nudge) |
-| `flow_plan_done` | Signals that planning is complete and hands off to the build pipeline (auto-launch in `--adx-auto`, picker in interactive mode) |
-| `ask_user` | Structured question (choice / confirm / text) that pauses the turn for a user answer — plan-mode clarification |
+| `flow_plan_done` | Signals that planning is complete and hands off to the build pipeline (auto-launch in `--adx-auto`, picker in interactive mode — including **Spec only — stop**, which exports the criteria as a spec file and launches nothing) |
+| `ask_user` | Structured question (choice / confirm / text) that pauses the turn for a user answer — plan/spec-mode clarification |
+| `spec_write` | Writes the spec markdown document (spec mode only; `defaultActive: false`, so it is inactive in plan/build modes) — the single write channel while the workspace stays read-only |
 
 ## Sub-agents
 

@@ -122,6 +122,10 @@ export interface FlowState {
   execution: ExecutionState | null
   /** Persisted plan-mode flag: restored when the session is resumed. */
   planMode?: boolean
+  /** Persisted spec-mode flag (read-only brainstorm/research; spec file pending). */
+  specMode?: boolean
+  /** Spec file location pinned for the in-progress spec (relative to cwd). */
+  specPath?: string
 }
 
 const STATE_DIR = '.pi/adx-flow'
@@ -228,6 +232,8 @@ function normalizeState(parsed: Partial<FlowState> | undefined): FlowState {
     metadata: parsed?.metadata ?? {},
     execution: parsed?.execution ?? null,
     planMode: parsed?.planMode ?? false,
+    specMode: parsed?.specMode ?? false,
+    specPath: parsed?.specPath,
   }
 }
 

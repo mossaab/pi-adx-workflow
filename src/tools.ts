@@ -20,6 +20,7 @@ import {
   mutateState,
   normalizeId,
 } from './store.js'
+import { composeSpecMarkdown, defaultSpecPath, resolveSpecPath, specPathError, writeSpecFile } from './spec.js'
 import type { FlowState, MetaEntry } from './store.js'
 /** Cap for the display-only "progress" feed (widget shows only the latest). */
 const PROGRESS_CAP = 20
@@ -279,6 +280,12 @@ export interface FlowPlanDoneDeps {
   withConfigDefaults: (rawArgs: string) => string
   /** Exit plan mode (restore build tools, clear badge) + notify. */
   exitPlanMode: () => void
+  /**
+   * "Spec only — stop": compose a spec markdown from the stored criteria,
+   * write it to the default .pi/specs/<slug>.md, return the written path.
+   * No workflow is launched.
+   */
+  specOnly: () => Promise<string>
   notify: (msg: string, level?: 'info' | 'warning' | 'error') => void
 }
 
@@ -289,7 +296,7 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
     description:
       'Signal that planning is complete: every final acceptance criterion has been added with flow_meta (key "criteria"). ' +
       'In auto mode the workflow continues automatically to build; in interactive mode the user is offered a picker ' +
-      '(build + verify / build simple / choose workspace). ' +
+      '(build + verify / build simple / choose workspace / spec only — stop, which exports the criteria as a spec file and launches nothing). ' +
       'Without a dialog UI (print/json modes) plan mode stays on and the turn ends — start the pipeline with /adx-build or /adx-build-verify. ' +
       'Call it once, after the complete criteria recap is presented.',
     promptSnippet: 'Mark planning complete so the workflow can continue to build',
@@ -355,8 +362,27 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
         'Build + verify (full pipeline)',
         'Build (simple)',
         'Choose workspace',
+        'Spec only — stop',
       ])
       if (mode === undefined) return cancelled()
+      if (mode === 'Spec only — stop') {
+        // Export the stored criteria as a spec document and stop here:
+        // exit plan mode, launch nothing.
+        const path = await deps.specOnly()
+        deps.exitPlanMode()
+        deps.notify(`adx: spec saved to ${path} — no build launched`, 'info')
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Planning complete. Spec saved to ${path} (no build launched).`,
+            },
+          ],
+          details: {},
+          // End the turn: nothing is launched, plan mode is off.
+          terminate: true,
+        }
+      }
       let workflow: 'build' | 'build-verify' = mode.startsWith('Build + verify') ? 'build-verify' : 'build'
       let args = workflow === 'build-verify' ? deps.withConfigDefaults('') : ''
       if (mode === 'Choose workspace') {
@@ -433,6 +459,103 @@ export function createFlowStepDoneTool(onStepDone: (info: StepDoneInfo) => Promi
         ],
         details: {},
         // End this turn; the executor queues the next prompt (next step or nudge).
+        terminate: true,
+      }
+    },
+  }
+}
+
+// ============================================================================
+// spec_write (spec mode only)
+// ============================================================================
+
+export interface SpecWriteDeps {
+  /** cwd the spec path is resolved against (the active session's cwd). */
+  cwd: () => string | undefined
+  /** Spec path pinned via `/adx-spec <path>` (wins over the default). */
+  pinnedPath: () => string | undefined
+  notify: (msg: string, level?: 'info' | 'warning' | 'error') => void
+  /** Called after the file is written (index.ts ends spec mode here). */
+  onWritten?: (absPath: string) => void
+}
+
+export function createSpecWriteTool(deps: SpecWriteDeps) {
+  return {
+    name: 'spec_write',
+    label: 'Spec Write',
+    // Inactive by default: spec mode activates it explicitly (setActiveTools),
+    // so it never leaks into plan/build modes.
+    defaultActive: false,
+    description:
+      'Write the brainstorming/research spec document (markdown) to a file — the single write channel in spec mode while the workspace stays read-only. '
+      + 'Target: args.path (a .md path inside the project), else the path pinned via /adx-spec, else .pi/specs/<slug>.md. '
+      + 'Call it EXACTLY ONCE, at the end of spec mode, with the complete spec markdown. No build is launched afterwards.',
+    promptSnippet: 'Write the final spec markdown document (spec mode only; call once, at the end)',
+    promptGuidelines: [
+      'Call spec_write exactly once, at the end of spec mode, with the full spec markdown (context & goal, research notes, decisions & assumptions, acceptance-criteria checklist).',
+    ],
+    parameters: Type.Object({
+      content: Type.String({ description: 'The complete spec markdown document' }),
+      path: Type.Optional(
+        Type.String({
+          description: 'Target .md path inside the project (default: the /adx-spec pinned path, else .pi/specs/<slug>.md)',
+        }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      args: { content?: string; path?: string },
+      _signal: AbortSignal | undefined,
+      _onUpdate: unknown,
+      _ctx: ExtensionToolContext,
+    ) {
+      const cwd = deps.cwd()
+      if (!cwd) {
+        return {
+          content: [
+            { type: 'text' as const, text: 'spec_write: no active session (cwd unknown) — re-run /adx-spec first.' },
+          ],
+          details: {},
+        }
+      }
+      const content = typeof args.content === 'string' ? args.content : ''
+      if (!content.trim()) {
+        return {
+          content: [
+            { type: 'text' as const, text: 'spec_write: content is empty — pass the complete spec markdown.' },
+          ],
+          details: {},
+        }
+      }
+      const chosen = args.path?.trim() || deps.pinnedPath()
+      const fallback = defaultSpecPath(cwd)
+      const target = chosen ? resolveSpecPath(cwd, chosen) : resolveSpecPath(cwd, fallback)
+      if (!target) {
+        const problem = specPathError(cwd, chosen ?? fallback) ?? 'Spec path could not be resolved.'
+        deps.notify(`adx: ${problem}`, 'warning')
+        return {
+          content: [{ type: 'text' as const, text: `spec_write: ${problem}` }],
+          details: {},
+        }
+      }
+      try {
+        await writeSpecFile(cwd, target, content)
+      } catch (err) {
+        const msg = `adx: failed to write spec — ${err instanceof Error ? err.message : String(err)}`
+        deps.notify(msg, 'error')
+        return { content: [{ type: 'text' as const, text: msg }], details: {} }
+      }
+      deps.notify(`adx: spec saved to ${target}`, 'info')
+      deps.onWritten?.(target)
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Spec saved to ${target}. Spec mode is complete — the session is now in normal build mode (no build launched).`,
+          },
+        ],
+        details: {},
+        // End the turn: the spec is saved and spec mode has ended.
         terminate: true,
       }
     },
