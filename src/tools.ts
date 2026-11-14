@@ -278,8 +278,13 @@ export interface FlowPlanDoneDeps {
   launch: (workflow: 'build' | 'build-verify', args: string) => Promise<void>
   /** Apply the config's skipReview default to launch args. */
   withConfigDefaults: (rawArgs: string) => string
-  /** Exit plan mode (restore build tools, clear badge) + notify. */
-  exitPlanMode: () => void
+  /**
+   * Exit plan mode (restore build tools, clear badge) + notify. Awaited
+   * before launching: the planMode=false persist must land before the
+   * executor's launch persist() (load + save), or the stale flag would be
+   * written back over it.
+   */
+  exitPlanMode: () => Promise<void>
   /**
    * "Spec only — stop": compose a spec markdown from the stored criteria,
    * write it to the default .pi/specs/<slug>.md, return the written path.
@@ -313,7 +318,7 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
     ) {
       if (deps.autoMode()) {
         // Unattended pipeline: straight into build-verify, no dialogs.
-        deps.exitPlanMode()
+        await deps.exitPlanMode()
         deps.notify('adx: auto mode — planning complete, launching build-verify (no review)', 'info')
         await deps.launch('build-verify', 'auto=true skip_review=true')
         return {
@@ -369,7 +374,7 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
         // Export the stored criteria as a spec document and stop here:
         // exit plan mode, launch nothing.
         const path = await deps.specOnly()
-        deps.exitPlanMode()
+        await deps.exitPlanMode()
         deps.notify(`adx: spec saved to ${path} — no build launched`, 'info')
         return {
           content: [
@@ -400,7 +405,7 @@ export function createFlowPlanDoneTool(deps: FlowPlanDoneDeps) {
         const locArg = `worklocation=${loc.startsWith('Work in current') ? 'current' : 'new'}`
         args = workflow === 'build-verify' ? deps.withConfigDefaults(locArg) : locArg
       }
-      deps.exitPlanMode()
+      await deps.exitPlanMode()
       deps.notify(`adx: launching ${workflow}${args ? ` (${args})` : ''}`, 'info')
       await deps.launch(workflow, args)
       return {

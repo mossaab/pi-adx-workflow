@@ -1,6 +1,6 @@
 {
   "name": "pi-adx-workflow",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Declarative plan → build → verify → review workflow for pi-coding-agent, with in-house isolated sub-agents and never-stop auto-continue.",
   "type": "module",
   "license": "MIT",

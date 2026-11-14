@@ -156,6 +156,25 @@ export class AdxExecutor {
     )
   }
 
+  /**
+   * Clear in-memory run state when the pi process switches to a brand-new
+   * session (/new, fork): the previous session's run/workflow/sessionId must
+   * not leak into the new one (builder prompt section, persist() target,
+   * isActive() checks). Called from session_start (reason "new"/"fork")
+   * before any restore; the new session's own state file is (by definition)
+   * empty, so nothing is re-entered.
+   */
+  resetForNewSession(): void {
+    this.run = undefined
+    this.workflow = undefined
+    this.sessionId = undefined
+    this.cwd = undefined
+    this.stepDoneCalled = false
+    this.autoContinueCount = 0
+    this.resumeReentry = false
+    this.deps.updateWidget?.()
+  }
+
   // ------------------------------------------------------------------ launch
   async launch(workflowId: string, ctx: ExtensionContext, rawArgs?: string): Promise<void> {
     this.bindCtx(ctx)

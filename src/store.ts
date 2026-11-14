@@ -265,6 +265,24 @@ async function adoptLegacy(cwd: string, sessionId: string): Promise<FlowState | 
 
 let versionNotified = false
 
+/**
+ * Legacy shared-file adoption switch — enabled only while a RESUMED session
+ * ("startup"/"resume" session_start) loads state: a legacy in-flight run in
+ * the shared state.json is then adopted as a one-time migration for sessions
+ * created before per-session state existed. Brand-new sessions (/new, fork)
+ * run with it disabled: they start 100% clean, so a stale in-flight legacy
+ * run cannot auto-execute in them (it stays in the previous session's own
+ * state file, resumable by re-resuming that session).
+ */
+let legacyAdoption = true
+export function setLegacyAdoption(enabled: boolean): void {
+  legacyAdoption = enabled
+}
+/** Current adoption gate (the widget's legacy fallback mirrors the store's). */
+export function legacyAdoptionEnabled(): boolean {
+  return legacyAdoption
+}
+
 export async function loadState(cwd: string, sessionId?: string): Promise<FlowState> {
   const parsed = await readRaw(stateFileFor(cwd, sessionId))
   if (parsed !== undefined) {
@@ -278,8 +296,9 @@ export async function loadState(cwd: string, sessionId?: string): Promise<FlowSt
     }
     return normalizeState(parsed)
   }
-  // New per-session file: try to adopt a legacy in-flight run (shared state.json).
-  if (sessionId && process.env.ADX_CHILD !== '1') {
+  // New per-session file: try to adopt a legacy in-flight run (shared
+  // state.json) — only for resumed sessions (see setLegacyAdoption).
+  if (sessionId && process.env.ADX_CHILD !== '1' && legacyAdoption) {
     const adopted = await adoptLegacy(cwd, sessionId)
     if (adopted) return adopted
   }

@@ -7,7 +7,7 @@
  * summarize → $done, with persistence and widget refreshes.
  */
 import { fileURLToPath } from 'node:url'
-import { existsSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJitiFromPi } from './find-jiti.mjs'
@@ -779,6 +779,265 @@ check(
     'uniqueSpecPath reports a free path unchanged',
     spec.uniqueSpecPath(join(specDir, 'spec-20250101-000001.md')) === join(specDir, 'spec-20250101-000001.md'),
   )
+}
+
+// ------------------------------------------------------------------ multi-session: /new starts 100% clean, resume keeps never-stop
+// The extension factory is driven with a fake pi: session_start (reason
+// new/fork/resume) + before_agent_start sections + /adx-run command.
+// (a) a stale legacy in-flight state.json must NOT auto-execute in a new
+// session; (b) resuming an in-flight session re-enters the step (never-stop);
+// (c) after /new, /adx-run writes the NEW session's state file; (d) a
+// finished run leaves planMode=false in its state file (launch-path race).
+{
+  const extMod = await jiti.import(join(srcDir, 'index.ts'))
+  const adxExtension = extMod.default
+
+  // Hermetic project config (project > user precedence): no auto plan mode,
+  // no widget (the extension's updateWidget early-returns without UI calls).
+  writeFileSync(
+    join(scratchRepo, '.pi', 'adx-workflow.json'),
+    JSON.stringify({ defaultPlanMode: false, showWidget: false, autoMode: false }),
+  )
+
+  const freshMsgs = []
+  const extHandlers = {}
+  const extCommands = {}
+  const fakePiExt = {
+    on: (event, handler) => {
+      ;(extHandlers[event] ??= []).push(handler)
+    },
+    registerTool: () => {},
+    registerCommand: (name, def) => {
+      extCommands[name] = def
+    },
+    registerFlag: () => {},
+    registerShortcut: () => {},
+    getFlag: () => false,
+    getActiveTools: () => ['bash', 'read'],
+    setActiveTools: () => {},
+    sendUserMessage: (m) => {
+      freshMsgs.push(m)
+    },
+  }
+  adxExtension(fakePiExt)
+
+  const multiCtx = (sessionId, notes = []) => ({
+    cwd: scratchRepo,
+    sessionManager: { getSessionId: () => sessionId },
+    hasUI: true,
+    ui: {
+      notify: (m, l) => notes.push(`${l ?? 'info'}: ${m}`),
+      select: async (_t, options) => options[0],
+      setWidget: () => {},
+      setStatus: () => {},
+      theme: { fg: (_c, t) => t, bold: (t) => t, strikethrough: (t) => t },
+    },
+  })
+  const startSession = (reason, sessionId) =>
+    extHandlers.session_start[0]({ type: 'session_start', reason }, multiCtx(sessionId))
+  const sectionsOf = () => {
+    const sections = {}
+    extHandlers.before_agent_start[0]({ systemPromptOptions: { sections } })
+    return sections
+  }
+  const multiState = (sessionId) =>
+    JSON.parse(readFileSync(join(scratchRepo, '.pi', 'adx-flow', 'state', `${sessionId}.json`), 'utf8'))
+
+  // (a) A stale legacy shared file with an in-flight run (pre-per-session era).
+  const legacyPath = join(scratchRepo, '.pi', 'adx-flow', 'state.json')
+  writeFileSync(
+    legacyPath,
+    JSON.stringify(
+      {
+        version: 1,
+        metadata: { criteria: [{ id: '1', description: 'Legacy criterion', status: 'completed' }] },
+        execution: {
+          workflowId: 'build-verify',
+          workflowName: 'Build & Verify',
+          status: 'running',
+          currentStep: 'build',
+          iteration: 2,
+          lastStepOutput: {},
+          lastStepResult: '',
+          params: {},
+          updatedAt: new Date().toISOString(),
+          seenSteps: ['work_location', 'build'],
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  const legacyBefore = readFileSync(legacyPath, 'utf8')
+  freshMsgs.length = 0
+  await startSession('new', 'multi-a')
+  check('(a) new session with legacy in-flight run: no step prompt auto-injected', freshMsgs.length === 0)
+  check('(a) new session: legacy file untouched (no migratedTo mark)', readFileSync(legacyPath, 'utf8') === legacyBefore)
+  check('(a) new session: no builder prompt section (executor inactive)', !('adx-impl' in sectionsOf()))
+  // (a) is done with the legacy file: remove it so later scenarios' widget
+  // "active" check (legacy fallback in widgets.readState) isn't disturbed.
+  rmSync(legacyPath)
+
+  // (b) Resuming the SAME session with an in-flight run re-enters the step
+  // (never-stop preserved for genuine resumes).
+  const bPath = join(scratchRepo, '.pi', 'adx-flow', 'state', 'multi-b.json')
+  writeFileSync(
+    bPath,
+    JSON.stringify(
+      {
+        version: 1,
+        metadata: { criteria: [{ id: '1', description: 'Resume criterion', status: 'completed' }] },
+        execution: {
+          workflowId: 'build-verify',
+          workflowName: 'Build & Verify',
+          status: 'running',
+          currentStep: 'build',
+          iteration: 1,
+          lastStepOutput: {},
+          lastStepResult: '',
+          params: {},
+          updatedAt: new Date().toISOString(),
+          seenSteps: ['work_location', 'build'],
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  freshMsgs.length = 0
+  await startSession('resume', 'multi-b')
+  check('(b) resume of in-flight session: step prompt auto-injected (never-stop)', freshMsgs.length === 1 && freshMsgs[0].includes('flow_step_done'))
+  check('(b) resume: builder prompt section active', 'adx-impl' in sectionsOf())
+
+  // (c) /new after that session: /adx-run writes the NEW session's file; the
+  // old session's in-flight run stays intact in its own file.
+  freshMsgs.length = 0
+  await startSession('new', 'multi-c')
+  check('(c) after /new: executor state reset (no builder section from the old run)', !('adx-impl' in sectionsOf()))
+  await extCommands['adx-run'].handler('build-verify worklocation=current', multiCtx('multi-c'))
+  check('(c) /adx-run after /new writes the NEW session state file', multiState('multi-c').execution?.status === 'running' && multiState('multi-c').execution?.currentStep === 'build')
+  check('(c) old session file untouched (in-flight run stays there)', multiState('multi-b').execution?.status === 'running' && multiState('multi-b').execution?.currentStep === 'build')
+
+  // (d) Finished run leaves planMode=false: emulate the fixed launch path —
+  // an AWAITED planMode=false persist (exitPlanMode) must not be clobbered
+  // by the executor's launch persist (the old fire-and-forget race wrote it
+  // back, leaving done runs with planMode=true).
+  const dPath = join(scratchRepo, '.pi', 'adx-flow', 'state', 'multi-d.json')
+  writeFileSync(
+    dPath,
+    JSON.stringify(
+      {
+        version: 1,
+        metadata: { criteria: [{ id: '1', description: 'Race criterion', status: 'completed' }] },
+        execution: null,
+        planMode: true,
+      },
+      null,
+      2,
+    ),
+  )
+  const storeMod = await jiti.import(join(srcDir, 'store.ts'))
+  await storeMod.mutateState(scratchRepo, 'multi-d', (s) => {
+    s.planMode = false
+  })
+  const dMsgs = []
+  const dExec = new AdxExecutor({
+    pi: { sendUserMessage: (m) => dMsgs.push(m) },
+    notify: () => {},
+    updateWidget: () => {},
+    spawn: async () => {
+      throw new Error('no sub-agent steps in the plan-mode race scenario')
+    },
+    resume: async () => {
+      throw new Error('no sub-agent steps in the plan-mode race scenario')
+    },
+  })
+  await dExec.launch('build', multiCtx('multi-d'), 'worklocation=current commit=false')
+  check('(d) build step prompt injected (race scenario run started)', dMsgs.length === 1 && dMsgs[0].includes('criteria'))
+  await dExec.onStepDone({}) // build done → commit auto-skipped → summarize
+  check('(d) summarize prompt injected after auto-skip', dMsgs.at(-1)?.includes('What to test'))
+  await dExec.onStepDone({})
+  check('(d) finished run leaves planMode=false in its state file', multiState('multi-d').execution?.status === 'done' && multiState('multi-d').planMode === false)
+
+  // (e) Re-entering plan mode AFTER a completed run (execution stays done)
+  // and stopping mid-plan must restore plan mode on resume — the guard must
+  // not treat the stale done execution as "plan finished".
+  writeFileSync(
+    join(scratchRepo, '.pi', 'adx-flow', 'state', 'multi-e.json'),
+    JSON.stringify(
+      {
+        version: 1,
+        metadata: { criteria: [{ id: '1', description: 'Next iteration', status: 'completed' }] },
+        execution: {
+          workflowId: 'build',
+          workflowName: 'Build',
+          status: 'done',
+          currentStep: 'summarize',
+          iteration: 3,
+          lastStepOutput: {},
+          lastStepResult: '',
+          params: {},
+          updatedAt: new Date().toISOString(),
+          seenSteps: ['work_location', 'build', 'summarize'],
+        },
+        planMode: true,
+      },
+      null,
+      2,
+    ),
+  )
+  const eNotes = []
+  const eCtx = multiCtx('multi-e', eNotes)
+  await extHandlers.session_start[0]({ type: 'session_start', reason: 'resume' }, eCtx)
+  check('(e) plan re-entered after a done run is restored on resume', 'adx-plan' in sectionsOf())
+  check('(e) "plan mode restored" notification emitted', eNotes.some((n) => n.includes('plan mode restored')))
+
+  // (f) plan→spec switch: the fire-and-forget exitPlanMode continuation
+  // must not clear the SPEC badge it was superseded by (badge writes are
+  // observed via ctx.ui.setStatus; the last write must be the spec badge).
+  // Badge writes are suppressed with showWidget=false, so flip the scratch
+  // project config back on and re-load it via a fresh session_start.
+  writeFileSync(
+    join(scratchRepo, '.pi', 'adx-workflow.json'),
+    JSON.stringify({ defaultPlanMode: false, showWidget: true, autoMode: false }),
+  )
+  await extHandlers.session_start[0]({ type: 'session_start', reason: 'new' }, multiCtx('multi-f'))
+  const statusWrites = []
+  const fBase = multiCtx('multi-f')
+  const fCtx = {
+    ...fBase,
+    ui: {
+      ...fBase.ui,
+      setStatus: (key, value) => {
+        statusWrites.push(value)
+      },
+    },
+  }
+  await extCommands['adx-plan'].handler('', fCtx)
+  await extCommands['adx-spec'].handler('', fCtx)
+  // Let the pending exit continuation (post-persist) settle.
+  for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r))
+  check('(f) plan→spec switch keeps the SPEC badge (no clobber)', statusWrites.at(-1)?.includes('[SPEC]') === true)
+
+  // (g) /new after a plan-mode session: in-memory mode state must not leak
+  // into the new session (the extension closure + widget badge survive for
+  // the whole pi process) — no adx-plan prompt section, no [PLAN] badge.
+  const gBase = multiCtx('multi-g')
+  const gStatus = []
+  const gCtx = {
+    ...gBase,
+    ui: {
+      ...gBase.ui,
+      setStatus: (key, value) => {
+        gStatus.push(value)
+      },
+    },
+  }
+  await extCommands['adx-plan'].handler('', gCtx)
+  check('(g) [PLAN] badge set before /new', gStatus.at(-1)?.includes('[PLAN]') === true)
+  await extHandlers.session_start[0]({ type: 'session_start', reason: 'new' }, gCtx)
+  check('(g) /new after plan mode: no adx-plan section (in-memory state reset)', !('adx-plan' in sectionsOf()))
+  check('(g) /new clears the [PLAN] badge', gStatus.at(-1) === undefined)
 }
 
 // ------------------------------------------------------------------ report

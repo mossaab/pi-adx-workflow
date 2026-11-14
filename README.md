@@ -188,9 +188,12 @@ saves it to `.pi/specs/<slug>.md`, exits plan mode, and launches nothing.
 State lives **per pi session** in `.pi/adx-flow/state/<sessionId>.json`
 (criteria, findings, execution state, plan-mode and spec-mode flags) — each session has its
 own plan, and resuming a session restores exactly that session's plan/run.
-A new session starts fresh. On the first per-session load, an in-flight run
-still in the legacy shared `.pi/adx-flow/state.json` (status ≠ done) is
-adopted into the new session's file once, so pre-existing runs keep working.
+**New sessions (`/new`, fork) start 100% clean**: no execution is restored and no
+step auto-executes — an in-flight run left behind by a previous session stays in
+*that* session's own file and comes back only when you re-resume it. When a resumed
+session has no per-session file yet, an in-flight run still in the legacy shared
+`.pi/adx-flow/state.json` (status ≠ done) is adopted into its file once, so
+pre-per-session runs keep working — new sessions never touch the legacy file.
 Flow sub-agents (verifier / code reviewer) write to the *parent's* state file
 (passed via the `ADX_FLOW_STATE` env var) so their `flow_meta` updates land
 in the driving session's store. It survives pi restarts — `session_start`

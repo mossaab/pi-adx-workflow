@@ -37,10 +37,10 @@ import {
   getSpecModeTools,
   planModeBashGuard,
 } from './modes.js'
-import { loadState, mutateState, onStateWarning } from './store.js'
+import { loadState, mutateState, onStateWarning, setLegacyAdoption } from './store.js'
 import { composeSpecMarkdown, defaultSpecPath, specPathError, writeSpecFile } from './spec.js'
 import { relative, resolve as resolvePath } from 'node:path'
-import { refreshFlowWidget, clearFlowWidget, setModeBadge } from './widgets.js'
+import { refreshFlowWidget, clearFlowWidget, setModeBadge, type ModeBadgeSpec } from './widgets.js'
 import { createAskUserTool } from './ask-user.js'
 import { loadConfig, type AdxConfig } from './config.js'
 import {
@@ -76,30 +76,41 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   let config: AdxConfig = {}
   /** Pi session id — keys the per-session adx state file (own plan per session). */
   let sessionId: string | undefined
+  /** Latest pending plan/spec flag persist — launch paths await this chain. */
+  let pendingModePersist: Promise<unknown> = Promise.resolve()
 
-  /** Persist the plan-mode flag into the session's state file (resume-friendly). */
-  function persistPlanMode(on: boolean): void {
+  /**
+   * Persist the plan-mode flag into the session's state file (resume-friendly).
+   * Returns the write promise: launch paths AWAIT it so the executor's next
+   * persist() (load + save) sees planMode=false — a fire-and-forget write
+   * used to lose that race, leaving finished runs with planMode=true.
+   */
+  function persistPlanMode(on: boolean): Promise<void> {
     const c = ctx
-    if (!c) return
+    if (!c) return Promise.resolve()
     const sid = sessionId ?? c.sessionManager.getSessionId()
-    void mutateState(c.cwd, sid, (state) => {
+    const p = mutateState(c.cwd, sid, (state) => {
       state.planMode = on
     }).catch(() => {
       /* best effort — the in-memory flag is authoritative */
     })
+    pendingModePersist = p
+    return p
   }
 
   /** Persist the spec-mode flag (and its pinned spec path) for resume. */
-  function persistSpecMode(on: boolean, path?: string): void {
+  function persistSpecMode(on: boolean, path?: string): Promise<void> {
     const c = ctx
-    if (!c) return
+    if (!c) return Promise.resolve()
     const sid = sessionId ?? c.sessionManager.getSessionId()
-    void mutateState(c.cwd, sid, (state) => {
+    const p = mutateState(c.cwd, sid, (state) => {
       state.specMode = on
       state.specPath = on ? path : undefined
     }).catch(() => {
       /* best effort — the in-memory flag is authoritative */
     })
+    pendingModePersist = p
+    return p
   }
 
   // ------------------------------------------------------------------ flag
@@ -172,9 +183,9 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
         return executor.launch(workflow, c, args)
       },
       withConfigDefaults,
-      exitPlanMode: () => {
+      exitPlanMode: async () => {
         const c = ctx
-        if (c) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+        if (c) await exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       },
       specOnly: async () => {
         // "Spec only — stop": export the stored criteria as a spec document
@@ -204,13 +215,13 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
       onWritten: (absPath) => {
         const c = ctx
         specPath = absPath
-        if (specMode) exitSpecMode((m, l) => c?.ui.notify(m, l ?? 'info'))
+        if (specMode) void exitSpecMode((m, l) => c?.ui.notify(m, l ?? 'info'))
       },
     }),
   )
 
   // ------------------------------------------------------------------ mode helpers
-  function showBadge(badge: string | undefined): void {
+  function showBadge(badge: ModeBadgeSpec | undefined): void {
     if (config.showWidget === false) badge = undefined
     if (ctx) setModeBadge(ctx, badge, sessionId)
   }
@@ -218,26 +229,35 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   function enterPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
     if (planMode) return
     // Plan mode and spec mode are mutually exclusive read-only modes.
-    if (specMode) exitSpecMode(() => {})
+    if (specMode) void exitSpecMode(() => {})
     planMode = true
     toolsBeforePlanMode = pi.getActiveTools()
     let tools = activatePlanModeTools(pi.getActiveTools())
     // Auto mode is unattended: no interactive question tool.
     if (autoMode) tools = tools.filter((t) => t !== 'ask_user')
     pi.setActiveTools(tools)
-    persistPlanMode(true)
-    showBadge(autoMode ? 'adx: [AUTO] plan → build → verify → recap' : 'adx: [PLAN] read-only · /adx-approve to exit · /adx-run to start')
+    void persistPlanMode(true)
+    showBadge(
+      autoMode
+        ? { mode: 'auto', detail: 'plan → build → verify → recap' }
+        : { mode: 'plan', detail: 'read-only · /adx-approve to exit · /adx-run to start' },
+    )
     notify('adx: plan mode ON (read-only). Propose acceptance criteria with flow_meta. Exit: /adx-approve or Ctrl+Alt+A.', 'info')
   }
 
-  function exitPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
+  async function exitPlanMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void): Promise<void> {
     if (!planMode) return
     planMode = false
     pi.setActiveTools(getBuildModeTools(toolsBeforePlanMode ?? pi.getActiveTools()))
     toolsBeforePlanMode = undefined
-    persistPlanMode(false)
+    // Badge + notification run synchronously so a fire-and-forget plan↔spec
+    // switch (enterSpecMode → void exitPlanMode) can't be clobbered by the
+    // pending continuation after the new mode's badge is already set.
     showBadge(undefined)
     notify('adx: plan mode OFF (build mode).', 'info')
+    // Last: the persist must land before any launch persist that follows
+    // (exitReadOnlyModes / flow_plan_done await this function for that).
+    await persistPlanMode(false)
   }
 
   function enterSpecMode(
@@ -246,34 +266,47 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   ): void {
     if (specMode) return
     // Spec mode and plan mode are mutually exclusive read-only modes.
-    if (planMode) exitPlanMode(() => {})
+    if (planMode) void exitPlanMode(() => {})
     specMode = true
     toolsBeforeSpecMode = pi.getActiveTools()
     pi.setActiveTools(getSpecModeTools(pi.getActiveTools()))
     specPath = pathArg || undefined
-    persistSpecMode(true, specPath)
-    showBadge(`adx: [SPEC] read-only · /adx-approve to exit${specPath ? ` · spec: ${specPath}` : ''}`)
+    void persistSpecMode(true, specPath)
+    showBadge({ mode: 'spec', detail: `read-only · /adx-approve to exit${specPath ? ` · spec: ${specPath}` : ''}` })
     notify(
       'adx: spec mode ON (read-only brainstorm/research). Explore, research, then call spec_write ONCE with the full spec markdown. Exit: /adx-approve or Ctrl+Alt+A.',
       'info',
     )
   }
 
-  function exitSpecMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void) {
+  async function exitSpecMode(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void): Promise<void> {
     if (!specMode) return
     specMode = false
     pi.setActiveTools(getBuildModeTools(toolsBeforeSpecMode ?? pi.getActiveTools()))
     toolsBeforeSpecMode = undefined
     specPath = undefined
-    persistSpecMode(false)
+    // Badge + notification run synchronously (same reason as exitPlanMode).
     showBadge(undefined)
     notify('adx: spec mode OFF (build mode).', 'info')
+    await persistSpecMode(false)
   }
 
-  /** Exit whichever read-only mode (plan/spec) is active — used before launching a build. */
-  function exitReadOnlyModes(notify: (msg: string, level?: 'info' | 'warning' | 'error') => void): void {
-    if (specMode) exitSpecMode(notify)
-    if (planMode) exitPlanMode(notify)
+  /**
+   * Exit whichever read-only mode (plan/spec) is active — used before
+   * launching a build. Awaited: the flag persists must land BEFORE the
+   * executor's launch persist() (which loads then saves the state file),
+   * or the executor would write back the stale planMode=true.
+   */
+  async function exitReadOnlyModes(
+    notify: (msg: string, level?: 'info' | 'warning' | 'error') => void,
+  ): Promise<void> {
+    if (specMode) await exitSpecMode(notify)
+    if (planMode) await exitPlanMode(notify)
+    // A fire-and-forget exit (e.g. the Ctrl+Alt+A shortcut) may still be
+    // persisting planMode=false: await the pending persist so the launch's
+    // loadState (which reads the file directly) cannot read it back stale
+    // and write it over the flag.
+    await pendingModePersist
   }
 
   // ------------------------------------------------------------------ commands
@@ -309,7 +342,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
           return
         }
       }
-      if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      if (planMode) void exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       enterSpecMode((m, l) => c.ui.notify(m, l ?? 'info'), raw || undefined)
     },
   })
@@ -318,8 +351,8 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // without launching a workflow.
   const approveHandler = async (_args: string, c: ExtensionCommandContext) => {
     ctx = c
-    if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
-    else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    if (specMode) await exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
+    else if (planMode) await exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
     else c.ui.notify('adx: already in build mode (plan mode is off)', 'info')
   }
   pi.registerCommand('adx-approve', {
@@ -331,7 +364,7 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
   // configured default one, or an explicit workflow id as the first token.
   const runHandler = async (args: string, c: ExtensionCommandContext) => {
     ctx = c
-    exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
+    await exitReadOnlyModes((m, l) => c.ui.notify(m, l ?? 'info'))
     // First bare token (no '=') names the workflow; the rest are key=value params.
     const tokens = (args ?? '').trim().split(/\s+/).filter(Boolean)
     const first = tokens[0]
@@ -488,22 +521,59 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     description: 'Toggle adx plan/spec mode (spec mode exits; plan mode enters/toggles)',
     handler: async (c) => {
       ctx = c
-      if (specMode) exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
-      else if (planMode) exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      if (specMode) await exitSpecMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      else if (planMode) await exitPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       else enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
     },
   })
 
   // ------------------------------------------------------------------ events
-  pi.on('session_start', async (_event, c) => {
+  pi.on('session_start', async (event, c) => {
     ctx = c
     sessionId = c.sessionManager.getSessionId()
     // First run: give the user a ready-to-edit config file with the defaults.
     const created = ensureUserConfig()
     if (created) c.ui.notify(`adx: created default config at ${created} (edit to customize)`, 'info')
     config = loadConfig(c.cwd)
-    // Restore this session's persisted state (per-session file: resuming a
-    // session brings back its plan/run; a new session starts fresh).
+
+    if (event.reason === 'new' || event.reason === 'fork') {
+      // /new or fork: a brand-new session starts 100% clean — no legacy
+      // adoption, no execution restore, no plan/spec mode inherited from a
+      // state file. The previous session's in-flight run (if any) stays in
+      // ITS per-session state file and is picked up by re-resuming that
+      // session. Config-driven entry (auto / defaultPlanMode) still applies.
+      setLegacyAdoption(false)
+      executor.resetForNewSession()
+      // The closure (and the widget's mode badge) lives for the whole pi
+      // process, so also drop the PREVIOUS session's in-memory mode state —
+      // without this, /new after a plan/spec session would start the new
+      // session still in read-only mode (prompt section + tool blocking +
+      // footer badge all inherited).
+      autoMode = false
+      if (planMode || specMode) {
+        const saved = planMode ? toolsBeforePlanMode : toolsBeforeSpecMode
+        planMode = false
+        specMode = false
+        specPath = undefined
+        toolsBeforePlanMode = undefined
+        toolsBeforeSpecMode = undefined
+        pendingModePersist = Promise.resolve()
+        pi.setActiveTools(getBuildModeTools(saved ?? pi.getActiveTools()))
+        showBadge(undefined)
+      }
+      if (pi.getFlag('adx-auto') === true || config.autoMode === true) {
+        autoMode = true
+        enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      } else if (config.defaultPlanMode === true) {
+        enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
+      }
+      return
+    }
+
+    // resume / startup / reload: restore this session's persisted state
+    // (per-session file; a legacy in-flight run is adopted as a one-time
+    // migration, resuming the plan/run from the last stop).
+    setLegacyAdoption(true)
     const state = await loadState(c.cwd, sessionId)
     if (state.execution && state.execution.status !== 'done') {
       c.ui.notify(`adx: restoring workflow "${state.execution.workflowName}" (status: ${state.execution.status})`, 'info')
@@ -520,6 +590,10 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     } else if (state.planMode === true) {
       // The session was stopped mid-plan: restore plan mode so the user can
       // pick up the unfinished plan (criteria are already in the state file).
+      // A finished run leaves planMode=false (the launch path persists it
+      // before the first executor persist), so this only fires for a plan
+      // that was genuinely left open — including a fresh plan started after
+      // a previous run finished.
       enterPlanMode((m, l) => c.ui.notify(m, l ?? 'info'))
       c.ui.notify('adx: plan mode restored (unfinished plan from last stop — continue with flow_meta, then /adx-run)', 'info')
     } else if (state.specMode === true) {
