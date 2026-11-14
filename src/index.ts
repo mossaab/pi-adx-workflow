@@ -36,6 +36,8 @@ import {
   getBuildModeTools,
   getSpecModeTools,
   planModeBashGuard,
+  CODE_EXEC_TOOLS,
+  planModeExecGuard,
 } from './modes.js'
 import { loadState, mutateState, onStateWarning, setLegacyAdoption } from './store.js'
 import { composeSpecMarkdown, defaultSpecPath, specPathError, writeSpecFile } from './spec.js'
@@ -632,20 +634,22 @@ export default function adxWorkflowExtension(pi: ExtensionAPI): void {
     }
   })
 
-  /** Plan/spec mode: guard bash tool calls against non-read-only commands. */
+  /** Plan/spec mode: guard code-executing tool calls (bash, ctx_execute, ctx_batch, codemode) against non-read-only operations. */
   pi.on('tool_call', (event) => {
-    if ((planMode || specMode) && event.toolName === 'bash') {
-      const args = (event.input ?? {}) as Record<string, unknown>
-      const problem = planModeBashGuard(args, (msg) =>
-        ctx?.ui.notify(msg, 'warning'),
-      )
-      if (problem) {
-        // Block the call and hand the reason back to the model as a tool result —
-        // WITHOUT terminate: the turn continues so the model can adapt (simpler
-        // read-only variant, another tool, or proceed with the plan). The mode
-        // itself stays on; only this one command is refused.
-        return { block: true, reason: problem }
-      }
+    if (!(planMode || specMode)) return
+    const args = (event.input ?? {}) as Record<string, unknown>
+    let problem: string | undefined
+    if (event.toolName === 'bash') {
+      problem = planModeBashGuard(args, (msg) => ctx?.ui.notify(msg, 'warning'))
+    } else if (CODE_EXEC_TOOLS.has(event.toolName)) {
+      problem = planModeExecGuard(event.toolName, args, (msg) => ctx?.ui.notify(msg, 'warning'))
+    }
+    if (problem) {
+      // Block the call and hand the reason back to the model as a tool result —
+      // WITHOUT terminate: the turn continues so the model can adapt (simpler
+      // read-only variant, another tool, or proceed with the plan). The mode
+      // itself stays on; only this one call is refused.
+      return { block: true, reason: problem }
     }
   })
   // ------------------------------------------------------------------ never-stop (auto-continue)

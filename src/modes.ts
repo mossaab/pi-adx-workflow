@@ -303,6 +303,77 @@ export function planModeBashGuard(
   return undefined
 }
 
+/**
+ * Code-executing tools that bypass the bash allowlist. In plan/spec mode they
+ * are guarded by planModeExecGuard (bash is guarded by planModeBashGuard).
+ * - ctx_execute: shell/python/js/ts snippet in a subprocess (full FS access)
+ * - ctx_batch:   several shell commands + search queries
+ * - codemode:    JS sandbox that can invoke ANY tool, including the write tools
+ */
+export const CODE_EXEC_TOOLS = new Set(['ctx_execute', 'codemode', 'ctx_batch'])
+
+/** Extract the ctx_execute snippet from a tool call's args (the `code` field). */
+export function ctxExecuteCodeFromArgs(args: Record<string, unknown>): string {
+  return typeof args?.code === 'string' ? args.code : ''
+}
+
+/** Extract the ctx_batch commands from a tool call's args (the `commands` array). */
+export function ctxBatchCommandsFromArgs(args: Record<string, unknown>): string[] {
+  return Array.isArray(args?.commands)
+    ? (args.commands as unknown[]).filter((c): c is string => typeof c === 'string')
+    : []
+}
+
+/**
+ * Guard code-executing tool calls (ctx_execute / ctx_batch / codemode) while in
+ * plan/spec mode: block calls that can write to the workspace. Returns an
+ * error message to inject as the tool result, or undefined when allowed.
+ *
+ * - codemode: always blocked (its JS can invoke any tool, incl. the write tools
+ *   that plan mode disables).
+ * - ctx_execute: only `language: "shell"` is allowed, and the snippet must pass
+ *   the read-only allowlist; python/js/ts snippets get full filesystem access.
+ * - ctx_batch: every shell command in `commands` must pass the read-only
+ *   allowlist.
+ */
+export function planModeExecGuard(
+  toolName: string,
+  args: Record<string, unknown>,
+  notify: (msg: string) => void,
+): string | undefined {
+  if (toolName === 'codemode') {
+    const msg = `Plan mode is read-only: codemode can invoke any tool (including edit/write) and is not allowed. Use read/grep/find/ls, read-only bash, or ctx_execute with language "shell" and a read-only command instead.`
+    notify(msg)
+    return msg
+  }
+  if (toolName === 'ctx_execute') {
+    const language = typeof args?.language === 'string' ? args.language : ''
+    if (language !== 'shell') {
+      const msg = `Plan mode is read-only: ctx_execute with language "${language || 'unknown'}" gives full filesystem access. Use language "shell" with a read-only command (e.g. git log, ls, grep) instead.`
+      notify(msg)
+      return msg
+    }
+    const code = ctxExecuteCodeFromArgs(args)
+    if (code && !isSafeCommand(code)) {
+      const msg = `Plan mode is read-only: ctx_execute shell snippet not on the read-only allowlist: ${code.slice(0, 120)}\nPlan mode stays active — retry with a read-only command (e.g. "ls -la" or "git log --oneline -3"; destructive commands like rm/mv/cp and file redirects are refused) or proceed with the plan.`
+      notify(msg)
+      return msg
+    }
+    return undefined
+  }
+  if (toolName === 'ctx_batch') {
+    for (const command of ctxBatchCommandsFromArgs(args)) {
+      if (!isSafeCommand(command)) {
+        const msg = `Plan mode is read-only: ctx_batch command not on the read-only allowlist: ${command.slice(0, 120)}\nPlan mode stays active — retry with read-only commands (e.g. "ls -la" or "git log --oneline -3"; destructive commands like rm/mv/cp and file redirects are refused) or proceed with the plan.`
+        notify(msg)
+        return msg
+      }
+    }
+    return undefined
+  }
+  return undefined
+}
+
 /** Convenience: apply the plan-mode tool set from an ExtensionContext's active tools. */
 export function activatePlanModeTools(activeTools: string[]): string[] {
   return getPlanModeTools(activeTools)
