@@ -172,6 +172,12 @@ export class AdxExecutor {
     this.stepDoneCalled = false
     this.autoContinueCount = 0
     this.resumeReentry = false
+    // Template-context caches: clear them too so no cross-session value can
+    // surface before the new session's first persist refreshes them (all
+    // readers are already guarded against undefined).
+    this.lastCtx = undefined
+    this.projectStatsCache = undefined
+    this._lastState = undefined
     this.deps.updateWidget?.()
   }
 

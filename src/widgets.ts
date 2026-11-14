@@ -138,7 +138,9 @@ function renderModeBadge(theme: ThemeLike, spec: ModeBadgeSpec): string {
   const s = MODE_CHIP_STYLES[spec.mode]
   const inner = ` ${theme.fg(s.fg, theme.bold(s.tag))} `
   const chip = theme.bg ? theme.bg(s.bg, inner) : inner
-  return `adx: ${chip}${spec.detail ? ` ${theme.fg('muted', spec.detail)}` : ''}`
+  // The chip is padded on both sides, so the prefix carries no trailing
+  // space (avoids the doubled 'adx:  [PLAN]' gap).
+  return `adx:${chip}${spec.detail ? ` ${theme.fg('muted', spec.detail)}` : ''}`
 }
 
 /** Render the adx-flow widget (criteria + step) or clear it when idle. */
